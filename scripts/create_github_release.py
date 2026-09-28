@@ -11,14 +11,16 @@ import urllib.error
 
 REPO = "Rajaaditya-2207/KIRO-Connect"
 TAG = "v0.1.0"
-RELEASE_NAME = "KIRO-Connect v0.1.0 — Windows Release (Installer & Standalone EXE)"
+RELEASE_NAME = "KIRO-Connect v0.1.0 — Windows Release (All-In-One Integrated EXE & Installer)"
 RELEASE_BODY = """## 🚀 KIRO-Connect v0.1.0: Windows Release
 
 Official Windows binaries for **KIRO-Connect: A Decentralized Peer-to-Peer Mixture-of-Agents Framework for Secure and Private Local LLM Inference over LAN**.
 
 ### 📦 Included Release Assets:
-- **`KIRO-Connect-Installer.exe`** (1.92 MB): Full Windows setup wizard with Start Menu shortcuts and Desktop icon.
-- **`KIRO-Connect.exe`** (5.01 MB): Standalone portable desktop executable built with Tauri v2.
+- **`KIRO-Connect.exe`** (~72 MB): **All-in-One Integrated Standalone Desktop Binary**. Bundles the complete FastAPI/Uvicorn backend, ChromaDB vector memory, and full React frontend UI together into a single portable `.exe`. No Python or terminal required—just double-click and run!
+- **`KIRO-Connect-Installer.exe`**: Full Windows desktop setup wizard with Start Menu shortcuts and Desktop icon.
+- **`KIRO-Connect-Setup.msi`**: Windows Installer package for managed deployments.
+- **`kiro-backend.exe`**: Standalone headless background service binary (for headless cluster worker nodes or dedicated server deployments).
 
 ### ✨ Highlights:
 - **Decentralized LAN MoA:** Multi-layer Mixture-of-Agents reasoning across local computers.
