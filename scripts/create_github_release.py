@@ -1,5 +1,5 @@
 """
-Create a GitHub Release on Rajaaditya-2207/KIRO-Connect and upload the Windows binary assets.
+Create and update GitHub Release on Rajaaditya-2207/KIRO-Connect and upload the Windows binary assets.
 """
 import os
 import sys
@@ -11,24 +11,22 @@ import urllib.error
 
 REPO = "Rajaaditya-2207/KIRO-Connect"
 TAG = "v0.1.0"
-RELEASE_NAME = "KIRO-Connect v0.1.0 — Windows Release (All-In-One Integrated EXE & Installer)"
+RELEASE_NAME = "KIRO-Connect v0.1.0 — Windows Release (All-In-One Standalone EXE & MSI Installer)"
 RELEASE_BODY = """## 🚀 KIRO-Connect v0.1.0: Windows Release
 
-Official Windows binaries for **KIRO-Connect: A Decentralized Peer-to-Peer Mixture-of-Agents Framework for Secure and Private Local LLM Inference over LAN**.
+Official Windows release packages for **KIRO-Connect: A Decentralized Peer-to-Peer Mixture-of-Agents Framework for Secure and Private Local LLM Inference over LAN**.
 
-### 📦 Included Release Assets:
-- **`KIRO-Connect.exe`** (~72 MB): **All-in-One Integrated Standalone Desktop Binary**. Bundles the complete FastAPI/Uvicorn backend, ChromaDB vector memory, and full React frontend UI together into a single portable `.exe`. No Python or terminal required—just double-click and run!
-- **`KIRO-Connect-Installer.exe`**: Full Windows desktop setup wizard with Start Menu shortcuts and Desktop icon.
-- **`KIRO-Connect-Setup.msi`**: Windows Installer package for managed deployments.
-- **`kiro-backend.exe`**: Standalone headless background service binary (for headless cluster worker nodes or dedicated server deployments).
+### 📦 Windows Distribution Assets:
+- **`KIRO-Connect-Setup.msi`** (~72 MB): **Official Windows 64-bit MSI Installer**. Installs KIRO-Connect cleanly to Program Files, provisions Desktop and Start Menu shortcuts, and registers standard Windows Add/Remove Programs support.
+- **`KIRO-Connect.exe`** (~72 MB): **All-in-One Integrated Standalone Portable Executable**. Bundles the FastAPI/Uvicorn backend, ChromaDB vector store, and full Cyberpunk React frontend into a single standalone file. No Python, terminal, or installer required—just double-click and run!
 
 ### ✨ Highlights:
-- **Decentralized LAN MoA:** Multi-layer Mixture-of-Agents reasoning across local computers.
+- **Decentralized LAN MoA:** Multi-layer Mixture-of-Agents reasoning across local machines.
 - **Dynamic 6-Digit PIN Security:** Private pairing handshake with session token authentication.
 - **Zeroconf (mDNS) Discovery:** Zero-configuration swarm discovery on LAN.
 - **Automated Host Shared Memory:** Autonomous orchestrator memory engine that maps agent proposal divergences against verified consensus ("wrong things" vs "right things") into shared ChromaDB state.
 - **llama.cpp Engine:** Native llama-server process lifecycle management.
-- **Custom Cyberpunk Theme:** Always-dark UI with real-time hardware telemetry and outlier detection.
+- **Zero Cloud Leakage:** 100% private, local inference without external telemetry or data tracking.
 """
 
 def get_git_token():
@@ -71,7 +69,7 @@ def main():
         else:
             raise
 
-    # 2. Create release if needed
+    # 2. Create release if needed or update metadata
     if not release_data:
         create_url = f"https://api.github.com/repos/{REPO}/releases"
         payload = {
@@ -89,30 +87,55 @@ def main():
             headers={**headers, "Content-Type": "application/json"}
         )
         print(f"Created new release (ID: {release_data['id']})")
+    else:
+        # Update existing release title and body
+        patch_url = f"https://api.github.com/repos/{REPO}/releases/{release_data['id']}"
+        payload = {
+            "name": RELEASE_NAME,
+            "body": RELEASE_BODY
+        }
+        _, release_data = make_request(
+            patch_url,
+            method="PATCH",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={**headers, "Content-Type": "application/json"}
+        )
+        print("Updated release metadata.")
 
-    upload_url_template = release_data["upload_url"] # e.g. https://uploads.github.com/repos/.../assets{?name,label}
+    upload_url_template = release_data["upload_url"]
     base_upload_url = upload_url_template.split("{")[0]
 
     # Existing assets
     existing_assets = {a["name"]: a["id"] for a in release_data.get("assets", [])}
 
-    # 3. Upload assets
-    assets_to_upload = [
-        Path("release/KIRO-Connect-Installer.exe"),
-        Path("release/KIRO-Connect-Setup.msi"),
-        Path("release/KIRO-Connect.exe"),
-        Path("release/kiro-backend.exe")
-    ]
+    # 3. Assets we want to keep
+    target_assets = {
+        "KIRO-Connect-Setup.msi": Path("release/KIRO-Connect-Setup.msi"),
+        "KIRO-Connect.exe": Path("release/KIRO-Connect.exe")
+    }
 
-    for asset_path in assets_to_upload:
+    # Delete any unwanted assets that are NOT in target_assets
+    for asset_name, asset_id in existing_assets.items():
+        if asset_name not in target_assets:
+            print(f"Deleting unwanted old asset {asset_name} (ID: {asset_id})...")
+            delete_url = f"https://api.github.com/repos/{REPO}/releases/assets/{asset_id}"
+            del_req = urllib.request.Request(delete_url, headers=headers, method="DELETE")
+            urllib.request.urlopen(del_req)
+            print(f"Successfully deleted {asset_name}.")
+
+    # Re-fetch existing assets after cleanup
+    _, updated_rel = make_request(f"https://api.github.com/repos/{REPO}/releases/{release_data['id']}", headers=headers)
+    current_assets = {a["name"]: a["id"] for a in updated_rel.get("assets", [])}
+
+    # 4. Upload target assets
+    for filename, asset_path in target_assets.items():
         if not asset_path.exists():
-            print(f"Warning: {asset_path} does not exist!")
+            print(f"Error: {asset_path} does not exist!")
             continue
 
-        filename = asset_path.name
-        if filename in existing_assets:
-            print(f"Deleting existing asset {filename} (ID: {existing_assets[filename]})...")
-            delete_url = f"https://api.github.com/repos/{REPO}/releases/assets/{existing_assets[filename]}"
+        if filename in current_assets:
+            print(f"Deleting existing asset {filename} (ID: {current_assets[filename]}) before re-upload...")
+            delete_url = f"https://api.github.com/repos/{REPO}/releases/assets/{current_assets[filename]}"
             del_req = urllib.request.Request(delete_url, headers=headers, method="DELETE")
             urllib.request.urlopen(del_req)
             print(f"Deleted old {filename}.")
@@ -132,7 +155,7 @@ def main():
             resp_json = json.loads(up_resp.read().decode("utf-8"))
             print(f"Successfully uploaded {filename}! Browser download URL: {resp_json['browser_download_url']}")
 
-    print("\nRelease publishing completed successfully!")
+    print("\nRelease assets synchronized successfully!")
     print(f"Release URL: {release_data['html_url']}")
 
 if __name__ == "__main__":
