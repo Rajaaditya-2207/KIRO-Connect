@@ -644,7 +644,16 @@ async def on_shutdown():
 # ============================================================================
 from fastapi.staticfiles import StaticFiles
 
-dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dist")
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    dist_dir = os.path.join(sys._MEIPASS, "dist")
+else:
+    dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dist")
+
+if not os.path.exists(dist_dir) and getattr(sys, "frozen", False):
+    exe_dist = os.path.join(os.path.dirname(sys.executable), "dist")
+    if os.path.exists(exe_dist):
+        dist_dir = exe_dist
+
 if os.path.exists(dist_dir):
     app.mount("/", StaticFiles(directory=dist_dir, html=True), name="frontend")
     logger.info(f"Mounted frontend static files from {dist_dir}")
