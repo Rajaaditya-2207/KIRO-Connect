@@ -98,7 +98,8 @@ def main():
     assets_to_upload = [
         Path("release/KIRO-Connect-Installer.exe"),
         Path("release/KIRO-Connect-Setup.msi"),
-        Path("release/KIRO-Connect.exe")
+        Path("release/KIRO-Connect.exe"),
+        Path("release/kiro-backend.exe")
     ]
 
     for asset_path in assets_to_upload:

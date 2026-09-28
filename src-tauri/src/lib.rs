@@ -27,24 +27,82 @@ fn try_launch_backend() -> Option<Child> {
         return None;
     }
 
-    let possible_paths = [
-        (PathBuf::from(r".venv\Scripts\python.exe"), PathBuf::from(r"service\run_server.py")),
-        (PathBuf::from(r"..\.venv\Scripts\python.exe"), PathBuf::from(r"..\service\run_server.py")),
-        (PathBuf::from(r"python.exe"), PathBuf::from(r"service\run_server.py")),
-    ];
+    let current_exe = std::env::current_exe().ok();
+    let exe_dir = current_exe.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf()));
 
-    for (py, script) in &possible_paths {
-        if py.exists() || py.to_str() == Some("python.exe") {
-            let mut cmd = Command::new(py);
+    // 1. Check for bundled standalone backend executable (kiro-backend.exe)
+    if let Some(ref dir) = exe_dir {
+        let sidecar_candidates = [
+            dir.join("kiro-backend.exe"),
+            dir.join("resources").join("kiro-backend.exe"),
+            dir.join("..").join("kiro-backend.exe"),
+            dir.join("..").join("release").join("kiro-backend.exe"),
+        ];
+        for sidecar in &sidecar_candidates {
+            if sidecar.exists() {
+                println!("Found standalone backend binary at {:?}", sidecar);
+                let mut cmd = Command::new(sidecar);
+                cmd.args(["--port", "8000"]);
+                if let Some(parent) = sidecar.parent() {
+                    cmd.current_dir(parent);
+                }
+                #[cfg(target_os = "windows")]
+                cmd.creation_flags(CREATE_NO_WINDOW);
+                if let Ok(child) = cmd.spawn() {
+                    println!("Spawned standalone backend sidecar.");
+                    return Some(child);
+                }
+            }
+        }
+    }
+
+    // 2. Discover project root and virtual environment
+    let mut search_roots: Vec<PathBuf> = Vec::new();
+    if let Some(ref dir) = exe_dir {
+        search_roots.push(dir.clone());
+        if let Some(p1) = dir.parent() {
+            search_roots.push(p1.to_path_buf());
+            if let Some(p2) = p1.parent() {
+                search_roots.push(p2.to_path_buf());
+                if let Some(p3) = p2.parent() {
+                    search_roots.push(p3.to_path_buf());
+                }
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        search_roots.push(cwd);
+    }
+    search_roots.push(PathBuf::from(r"C:\Users\rajaa\Desktop\Kiro-Connect"));
+
+    for root in search_roots {
+        let py_venv = root.join(".venv").join("Scripts").join("python.exe");
+        let script = root.join("service").join("run_server.py");
+
+        if py_venv.exists() && script.exists() {
+            println!("Found virtual environment at {:?} with script {:?}", py_venv, script);
+            let mut cmd = Command::new(&py_venv);
             cmd.args([script.to_str().unwrap_or("service/run_server.py"), "--port", "8000"]);
+            cmd.current_dir(&root);
+            cmd.env("PYTHONPATH", &root);
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NO_WINDOW);
 
             if let Ok(child) = cmd.spawn() {
-                println!("Spawned Swarm Gateway via {:?} with script {:?}", py, script);
+                println!("Successfully spawned Swarm Gateway from root {:?}", root);
                 return Some(child);
             }
         }
+    }
+
+    // 3. Fallback: check system python.exe with relative service/run_server.py
+    let mut cmd = Command::new("python.exe");
+    cmd.args(["service/run_server.py", "--port", "8000"]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(child) = cmd.spawn() {
+        println!("Spawned Swarm Gateway via system python.exe");
+        return Some(child);
     }
 
     println!("Notice: Swarm Gateway python environment not directly auto-spawned; will connect to active gateway.");
@@ -61,6 +119,15 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let child_proc = try_launch_backend();
+    if child_proc.is_some() {
+        for _ in 0..30 {
+            if is_port_open(8000) {
+                println!("Gateway port 8000 verified active!");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
 
     tauri::Builder::default()
         .manage(BackendProcess(Mutex::new(child_proc)))

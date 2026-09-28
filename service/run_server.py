@@ -22,7 +22,8 @@ def main():
     args = parser.parse_args()
 
     print(f"Starting KIRO-Connect in {args.mode.upper()} mode on {args.host}:{args.port}...")
-    uvicorn.run("service.gateway:app", host=args.host, port=args.port, reload=False)
+    from service.gateway import app
+    uvicorn.run(app, host=args.host, port=args.port, reload=False)
 
 if __name__ == "__main__":
     main()

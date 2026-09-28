@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from "react";
 import "./App.css";
 
-const API_BASE =
+const isTauri =
   typeof window !== "undefined" &&
-  window.location.origin &&
-  (window.location.port !== "1420" && window.location.port !== "5173")
-    ? window.location.origin
-    : "http://127.0.0.1:8000";
+  (window.location.origin.includes("tauri.localhost") ||
+   window.location.origin.startsWith("tauri://") ||
+   (window as any).__TAURI_INTERNALS__ !== undefined);
+
+const API_BASE = isTauri
+  ? "http://127.0.0.1:8000"
+  : typeof window !== "undefined" &&
+    window.location.origin &&
+    window.location.port !== "1420" &&
+    window.location.port !== "5173"
+      ? window.location.origin
+      : "http://127.0.0.1:8000";
 
 interface SwarmStatus {
   host_name: string;

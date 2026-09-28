@@ -8,6 +8,8 @@ dist/
 dist-ssr/
 src-tauri/target/
 target/
+build/
+*.spec
 
 # Python Virtual Environments & Caches
 .venv/
