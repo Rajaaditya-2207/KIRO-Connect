@@ -82,3 +82,5 @@ websocket-client==1.9.2
 websockets==17.1
 yarl==1.25.1
 zeroconf==0.151.3
+pywebview>=5.0.0
+Pillow>=10.0.0

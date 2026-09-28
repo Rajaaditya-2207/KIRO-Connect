@@ -13,18 +13,47 @@ logger = logging.getLogger("kiro.discovery")
 SERVICE_TYPE = "_kiro-connect._tcp.local."
 
 
+def get_all_local_ips() -> List[str]:
+    """Finds all non-loopback, non-link-local IPv4 addresses across network adapters."""
+    ips = []
+    # 1. Outbound routing test (works when connected to LAN router or internet)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        primary = s.getsockname()[0]
+        s.close()
+        if primary and not primary.startswith("127.") and not primary.startswith("169.254."):
+            ips.append(primary)
+    except Exception:
+        pass
+
+    # 2. Hostname resolution over all network adapters
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                if ip not in ips:
+                    ips.append(ip)
+    except Exception:
+        pass
+
+    return ips if ips else ["127.0.0.1"]
+
+
 def get_local_ip() -> str:
     """Finds the primary local LAN IP address of this machine."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # Does not actually send data; used to determine local outbound route
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except Exception:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
+    all_ips = get_all_local_ips()
+    if not all_ips:
+        return "127.0.0.1"
+    # If the first IP is a non-loopback outbound route, use it directly
+    primary = all_ips[0]
+    if not primary.startswith("127.") and not primary.startswith("169.254."):
+        return primary
+    for ip in all_ips:
+        if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
+            return ip
+    return all_ips[0]
 
 
 class SwarmHostBroadcaster:
@@ -33,6 +62,7 @@ class SwarmHostBroadcaster:
     def __init__(self, host_name: str, gateway_port: int, host_ip: Optional[str] = None):
         self.host_name = host_name
         self.gateway_port = gateway_port
+        self.all_ips = get_all_local_ips()
         self.host_ip = host_ip or get_local_ip()
         self.zeroconf: Optional[Zeroconf] = None
         self.service_info: Optional[ServiceInfo] = None
@@ -52,12 +82,18 @@ class SwarmHostBroadcaster:
                 "version": "1.0.0",
                 "port": str(self.gateway_port),
                 "ip": self.host_ip,
+                "all_ips": ",".join(self.all_ips)
             }
+
+            # Register with all detected network adapter IPs so workers on any adapter can connect
+            addresses = [socket.inet_aton(ip) for ip in self.all_ips if not ip.startswith("127.")]
+            if not addresses:
+                addresses = [socket.inet_aton(self.host_ip)]
 
             self.service_info = ServiceInfo(
                 type_=SERVICE_TYPE,
                 name=service_name,
-                addresses=[socket.inet_aton(self.host_ip)],
+                addresses=addresses,
                 port=self.gateway_port,
                 properties=desc,
                 server=f"{sanitized_name}.local."
@@ -65,7 +101,7 @@ class SwarmHostBroadcaster:
 
             self.zeroconf.register_service(self.service_info)
             self.is_broadcasting = True
-            logger.info(f"mDNS Swarm Host registered: {service_name} on {self.host_ip}:{self.gateway_port}")
+            logger.info(f"mDNS Swarm Host registered: {service_name} on {', '.join(self.all_ips)}:{self.gateway_port}")
             return True
         except Exception as e:
             logger.error(f"Failed to start mDNS broadcast: {e}")
@@ -102,19 +138,23 @@ class SwarmHostListener(ServiceListener):
     def update_service(self, zc: Zeroconf, type_: str, name: str) -> None:
         info = zc.get_service_info(type_, name)
         if info:
-            ip = socket.inet_ntoa(info.addresses[0]) if info.addresses else "127.0.0.1"
+            addresses = [socket.inet_ntoa(a) for a in info.addresses] if info.addresses else []
+            ip = addresses[0] if addresses else "127.0.0.1"
             props = {k.decode("utf-8", "ignore"): v.decode("utf-8", "ignore") if isinstance(v, bytes) else str(v)
                      for k, v in info.properties.items()}
+            all_ips = [x.strip() for x in props.get("all_ips", "").split(",") if x.strip()] or addresses or [ip]
             host_data = {
                 "service_name": name,
                 "display_name": props.get("name", name.split(".")[0]),
                 "ip": ip,
+                "all_ips": all_ips,
                 "port": info.port,
                 "version": props.get("version", "1.0.0"),
-                "endpoint": f"http://{ip}:{info.port}"
+                "endpoint": f"http://{ip}:{info.port}",
+                "endpoints": [f"http://{a}:{info.port}" for a in all_ips]
             }
             self.discovered_hosts[name] = host_data
-            logger.info(f"Discovered KIRO-Connect Host: {host_data['display_name']} at {host_data['endpoint']}")
+            logger.info(f"Discovered KIRO-Connect Host: {host_data['display_name']} at {host_data['endpoint']} (all IPs: {', '.join(all_ips)})")
             if self.on_update:
                 self.on_update(list(self.discovered_hosts.values()))
 
@@ -135,10 +175,18 @@ class SwarmWorkerBrowser:
         logger.info("Started mDNS browser for KIRO-Connect Hosts.")
 
     def stop(self):
-        if self.zeroconf:
-            self.zeroconf.close()
-            self.zeroconf = None
+        if self.browser:
+            try:
+                self.browser.cancel()
+            except Exception:
+                pass
             self.browser = None
+        if self.zeroconf:
+            try:
+                self.zeroconf.close()
+            except Exception:
+                pass
+            self.zeroconf = None
             logger.info("Stopped mDNS browser.")
 
     def get_hosts(self) -> List[Dict[str, Any]]:

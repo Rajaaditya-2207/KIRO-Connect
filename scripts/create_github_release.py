@@ -97,6 +97,7 @@ def main():
     # 3. Upload assets
     assets_to_upload = [
         Path("release/KIRO-Connect-Installer.exe"),
+        Path("release/KIRO-Connect-Setup.msi"),
         Path("release/KIRO-Connect.exe")
     ]
 

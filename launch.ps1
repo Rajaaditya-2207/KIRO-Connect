@@ -30,6 +30,25 @@ foreach ($port in $ports) {
 # Check if Microsoft C++ Linker (link.exe) is available for Tauri Rust compilation
 $hasLinker = $null -ne (Get-Command "link.exe" -ErrorAction SilentlyContinue)
 
+if (-not $hasLinker) {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $vsInstall = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($vsInstall) {
+            $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
+            if (Test-Path $vcvars) {
+                Write-Host "Auto-configuring MSVC C++ Build Tools environment from $vsInstall..." -ForegroundColor Cyan
+                cmd /c "`"$vcvars`" && set" | ForEach-Object {
+                    if ($_ -match '^(.*?)=(.*)$') {
+                        Set-Item -Path "env:\$($matches[1])" -Value $matches[2] -ErrorAction SilentlyContinue
+                    }
+                }
+                $hasLinker = $null -ne (Get-Command "link.exe" -ErrorAction SilentlyContinue)
+            }
+        }
+    }
+}
+
 if ($hasLinker) {
     Write-Host "1. Starting Swarm Gateway & Discovery Daemon..." -ForegroundColor Cyan
     $gatewayProc = Start-Process -FilePath $VenvPython -ArgumentList "service/run_server.py", "--port", "8000" -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden

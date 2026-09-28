@@ -1,74 +1,41 @@
-# KIRO-Connect Remediation & Fix Plan
+# KIRO-Connect Remediation, Build & Release Plan
 
 ## Goal
-Fix all identified defects in KIRO-Connect across process startup (`sys.path`), LAN worker networking (IP routing & lifecycle), engine readiness synchronization, consensus outlier detection, and desktop process cleanup so that the Mixture-of-Agents swarm runs seamlessly end-to-end on Windows LAN.
+Resolve all runtime, security, concurrency, process lifecycle, consensus calculation, and UI/UX issues across KIRO-Connect. Rebuild the frontend, compile the native Windows release binaries (Installer & Standalone EXE), and push the release to GitHub.
 
 ---
 
-## Root Causes & Identified Issues Addressed
-1. **ModuleNotFoundError on launch:** `service/run_server.py` and `launch.ps1` run without project root in `sys.path`.
-2. **Worker 127.0.0.1 LAN routing flaw:** `App.tsx` sends `127.0.0.1` as worker endpoint, so Host queries its own loopback instead of the worker laptop.
-3. **Worker engine disconnect:** Worker Mode UI has no button/API to start `llama-server.exe` on the worker machine.
-4. **Asynchronous engine start race:** `start_host_llama` returns success before weights load, causing immediate playground queries to throw 500 errors.
-5. **Host binding loopback only:** `host="127.0.0.1"` prevents external nodes from communicating with worker instances.
-6. **Consensus outlier math flaw:** `overall_semantic >= 0.50` fails when a single bad node drags down the mean, so outliers never get flagged.
-7. **Permanent node banishment:** Flagged nodes cannot recover; no UI or API exists to reset flags.
-8. **`asyncio_sleep` scope bug:** Defined at file bottom in `llama_manager.py`.
-9. **Hardcoded API base URL:** Hardcoded `http://127.0.0.1:8000` prevents remote browser access to dashboard.
-10. **Orphan process leaks:** Stale `llama-server.exe` processes occupy ports 8081/8082 after terminal exits.
+## Action Checklist
 
----
+### Phase 1: Core Runtime Blockers & Concurrency Safety
+- [x] **Task 1.1:** Fix Windows `0.0.0.0` healthcheck crash in `service/llama_manager.py` (connect to `127.0.0.1` locally when checking `/health`).
+- [x] **Task 1.2:** Update `requirements.txt` with `pywebview>=5.0.0` and `Pillow>=10.0.0`.
+- [x] **Task 1.3:** Implement `threading.Lock()` in `service/memory.py` to serialize SQLite ChromaDB writes.
+- [x] **Task 1.4:** Fix `get_all_corrections()` in `service/memory.py` to return real records from ChromaDB instead of mock data.
 
-## Actionable Tasks
+### Phase 2: Process Management & Windows System Hygiene
+- [x] **Task 2.1:** Update `src-tauri/src/lib.rs` to terminate the spawned Python child process when the Tauri window is closed or destroyed.
+- [x] **Task 2.2:** Update `launch.ps1` to detect MSVC Build Tools via `vswhere.exe` and invoke `vcvars64.bat` if `link.exe` is not in `$env:PATH`.
+- [x] **Task 2.3:** Add depth and count limits to `scan_custom_directory()` in `service/llama_manager.py` to prevent full-drive freezing.
+- [x] **Task 2.4:** Standardize `service/discovery.py` to cancel `ServiceBrowser` before closing Zeroconf, and ensure `get_local_ip()` prioritizes the verified active route.
 
-### Phase 1: Python Environment & Launchers (`launch.ps1`, `service/run_server.py`, `service/llama_manager.py`)
-- [x] **Task 1.1:** Add project root auto-resolution in `service/run_server.py` (`sys.path.insert(0, ...)`) and set `$env:PYTHONPATH = $PSScriptRoot` in `launch.ps1`.
-  - *Verified:* `python service/run_server.py --port 8000` launches without `ModuleNotFoundError: No module named 'service'`.
-- [x] **Task 1.2:** Clean up `service/llama_manager.py` imports: move `import asyncio` to top, replace `asyncio_sleep` with standard `await asyncio.sleep(0.5)`, and add pre-launch check to kill stale `llama-server.exe` processes holding ports 8081/8082.
-  - *Verified:* `llama_manager.py` imports cleanly with zero linter errors.
+### Phase 3: Consensus Math, Security & API Hardening
+- [x] **Task 3.1:** Enhance `compute_text_similarity` in `service/orchestrator.py` with punctuation stripping and negation mismatch penalties.
+- [x] **Task 3.2:** Fix 2-node divergence handling and decay logic in `service/orchestrator.py`.
+- [x] **Task 3.3:** Add streaming SSE (`stream: True`) support and non-empty message validation to `/v1/chat/completions` in `service/gateway.py`.
+- [x] **Task 3.4:** Add session token verification to `POST /api/swarm/heartbeat`.
+- [x] **Task 3.5:** Wrap candidate inputs in XML tags in `service/orchestrator.py` to guard against prompt injection.
 
-### Phase 2: Engine Readiness & Process Synchronization (`service/gateway.py`, `service/llama_manager.py`)
-- [x] **Task 2.1:** Update `start_host_llama` in `service/gateway.py` to await `llama_manager.wait_until_ready(timeout_secs=45)`. Only register `host-local` in `orchestrator` once the `/health` endpoint reports `ready`/`ok`.
-  - *Verified:* `POST /api/host/start-llama` blocks until engine is truly accepting completions; returns error log extract if process exits prematurely.
-- [x] **Task 2.2:** Allow configurable bind host (`0.0.0.0` for workers, `127.0.0.1` for host) and ensure `llama-status` reports actual process health.
-  - *Verified:* `GET /api/host/llama-status` reflects accurate state if process terminates unexpectedly.
+### Phase 4: Frontend UI/UX & MoA Playground
+- [x] **Task 4.1:** Restore and polish the interactive "MoA Swarm Playground" tab in `src/App.tsx`.
+- [x] **Task 4.2:** Implement safe clipboard copying fallback (`copyTextToClipboard`) for insecure LAN HTTP contexts.
+- [x] **Task 4.3:** Update `src/App.css` `.grid-cards-4` to an auto-fit responsive grid (`repeat(auto-fit, minmax(210px, 1fr))`) to symmetrically display the 5 stat cards.
+- [x] **Task 4.4:** Replace blocking `alert()` popups with inline notification toasts in `src/App.tsx`.
+- [x] **Task 4.5:** Modernize `API_BASE` resolution to work on any custom port.
 
-### Phase 3: Swarm LAN Networking & Worker Lifecycle (`service/gateway.py`, `src/App.tsx`)
-- [x] **Task 3.1:** Implement Worker Node APIs in `service/gateway.py`:
-  - `POST /api/worker/start-engine`: Launches worker `llama-server.exe` on specified port bound to `0.0.0.0`.
-  - `POST /api/worker/stop-engine`: Stops worker local inference engine.
-  - `POST /api/worker/join-swarm`: Auto-detects worker's LAN IP via `get_local_ip()`, pairs with Host, and starts background heartbeat.
-  - `GET /api/worker/status`: Returns current worker engine status, connection status, and assigned host.
-  - *Verified:* Worker node can start its own engine and pair with host using its real LAN IP (`http://192.168.x.x:8082`).
-- [x] **Task 3.2:** Update `src/App.tsx` Worker Mode:
-  - Add "Launch Worker Engine" and "Stop Worker Engine" controls with port and GGUF model selector.
-  - Replace hardcoded `127.0.0.1` with worker's detected LAN IP in pairing payload.
-  - Add mDNS discovered hosts dropdown list with 1-click select.
-  - Dynamic `API_BASE`: `window.location.origin` (when in browser/WebView) with fallback to `http://127.0.0.1:8000`.
-  - *Verified:* Worker UI displays engine status, discovered hosts, and pairs successfully without manual endpoint guessing.
-
-### Phase 4: MoA Consensus Math & Node Recovery (`service/orchestrator.py`, `service/gateway.py`, `src/App.tsx`)
-- [x] **Task 4.1:** Fix consensus and divergence detection in `service/orchestrator.py`:
-  - Compute peer consensus excluding the candidate node itself. If the remaining peer group exhibits agreement $\ge 0.50$ while candidate agreement is $< 0.45$, increment divergence count.
-  - *Verified:* In a 3-node swarm where 2 nodes agree (sim = 0.85) and 1 diverges (sim = 0.1), the outlier is correctly flagged without lowering overall consensus.
-- [x] **Task 4.2:** Add unflag / reset mechanism:
-  - Add `POST /api/swarm/nodes/{node_id}/reset-flag` in `service/gateway.py` and `orchestrator.reset_node_flag(node_id)`.
-  - Add "Unflag / Re-admit" action button in `src/App.tsx` on the Swarm Fleet table for flagged nodes.
-  - *Verified:* Flagged node can be reset and immediately rejoins the active inference pool.
-
-### Phase 5: Verification & End-to-End Testing
+### Phase 5: Verification, Build & GitHub Release
 - [x] **Task 5.1:** Rebuild frontend via `npm run build`.
-- [x] **Task 5.2:** Run integration tests (`scratch/test_integration.py` and MoA pipeline test) validating:
-  - Gateway status and pairing.
-  - Host engine launch and readiness check.
-  - MoA query completion returning OpenAI-compliant schema with `kiro_confidence` and `contributing_nodes`.
-  - Divergence detection and unflagging.
-
----
-
-## Done When
-- [x] Gateway server boots without `ModuleNotFoundError` from `launch.ps1`, `launch.py`, or direct CLI.
-- [x] Host engine reliably boots and verifies `/health` before allowing playground queries.
-- [x] Workers launch their local `llama-server.exe` on `0.0.0.0` and register their real LAN IP with the Host.
-- [x] Outlier nodes that diverge are accurately flagged, and the host user can unflag them from the UI.
-- [x] `npm run build` succeeds and desktop app opens cleanly.
+- [x] **Task 5.2:** Run integration test suite (`scratch/test_integration.py` & `scratch/test_shared_memory.py`).
+- [x] **Task 5.3:** Build native Windows release binary (`release/KIRO-Connect.exe`) and NSIS installer (`release/KIRO-Connect-Installer.exe`) via `npm run tauri build`.
+- [x] **Task 5.4:** Commit all fixes to git and push to `origin/main`.
+- [x] **Task 5.5:** Publish updated GitHub release v0.1.0 and upload release artifacts via `scripts/create_github_release.py`.

@@ -10,13 +10,16 @@ import random
 import string
 import logging
 import asyncio
+import json
+import time
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, Header, HTTPException, Depends, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from service.llama_manager import LlamaServerManager
-from service.discovery import SwarmHostBroadcaster, SwarmWorkerBrowser, get_local_ip
+from service.discovery import SwarmHostBroadcaster, SwarmWorkerBrowser, get_local_ip, get_all_local_ips
 from service.orchestrator import MoAOrchestrator, SwarmNode
 from service.memory import CorrectionMemory
 from service.worker_agent import WorkerAgent
@@ -162,7 +165,11 @@ async def chat_completions(req: ChatCompletionRequest, auth: str = Depends(verif
     Unified OpenAI-compatible Gateway endpoint.
     Fans out to LAN-only llama.cpp worker instances, aggregates MoA-style,
     and returns an OpenAI-standard response with non-breaking metadata.
+    Supports both standard JSON response and text/event-stream SSE streaming.
     """
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="The 'messages' array cannot be empty.")
+
     messages_dicts = [{"role": m.role, "content": m.content} for m in req.messages]
 
     # 1. Query Swarm Shared Memory for past mapped mistakes & consensus
@@ -215,6 +222,47 @@ async def chat_completions(req: ChatCompletionRequest, auth: str = Depends(verif
         if shared_memory_ctx:
             response["shared_memory_applied"] = True
 
+        # Handle streaming requested by external client (e.g. Open WebUI, LangChain)
+        if req.stream:
+            async def sse_event_generator():
+                chunk_id = f"chatcmpl-stream-{int(time.time() * 1000)}"
+                content = response["choices"][0]["message"]["content"]
+                words = content.split(" ")
+                for idx, w in enumerate(words):
+                    token = w + (" " if idx < len(words) - 1 else "")
+                    chunk = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": "kiro-connect-moa",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": token},
+                            "finish_reason": None
+                        }]
+                    }
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                    await asyncio.sleep(0.015)
+
+                final_chunk = {
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": "kiro-connect-moa",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop"
+                    }],
+                    "kiro_confidence": response.get("kiro_confidence", 1.0),
+                    "contributing_nodes": response.get("contributing_nodes", []),
+                    "shared_memory_applied": response.get("shared_memory_applied", False)
+                }
+                yield f"data: {json.dumps(final_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(sse_event_generator(), media_type="text/event-stream")
+
         return response
     except Exception as e:
         logger.error(f"MoA pipeline execution failed: {e}")
@@ -262,11 +310,18 @@ async def pair_worker(req: PairingRequest):
 
 
 @app.post("/api/swarm/heartbeat")
-async def worker_heartbeat(req: HeartbeatRequest):
+async def worker_heartbeat(req: HeartbeatRequest, authorization: Optional[str] = Header(None)):
     """Periodic worker heartbeat to report health."""
     node = orchestrator.nodes.get(req.worker_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not registered")
+
+    expected_token = authenticated_worker_tokens.get(req.worker_id)
+    if expected_token and authorization:
+        token = authorization.replace("Bearer ", "").strip()
+        if token != expected_token:
+            raise HTTPException(status_code=403, detail="Invalid session token for worker heartbeat")
+
     return {"status": "ok", "divergence_count": node.divergence_count}
 
 
@@ -278,11 +333,14 @@ async def worker_heartbeat(req: HeartbeatRequest):
 async def swarm_status():
     """Returns overall swarm status, gateway endpoint, pairing code, and session memory stats."""
     local_ip = get_local_ip()
+    all_ips = get_all_local_ips()
     return {
         "host_name": host_display_name,
         "local_ip": local_ip,
+        "all_local_ips": all_ips,
         "gateway_port": gateway_port,
         "gateway_endpoint": f"http://{local_ip}:{gateway_port}/v1",
+        "gateway_endpoints": [f"http://{ip}:{gateway_port}/v1" for ip in all_ips],
         "host_api_key": HOST_API_KEY,
         "pairing_code": current_pairing_code,
         "total_nodes": len(orchestrator.nodes),
@@ -454,12 +512,16 @@ async def host_llama_status():
 # ============================================================================
 
 @app.get("/api/worker/discovered-hosts")
-async def get_discovered_hosts():
-    """Returns hosts found on LAN via mDNS."""
+async def get_discovered_hosts(refresh: bool = False):
+    """Returns hosts found on LAN via mDNS, with option to force active re-scan."""
     global worker_browser
+    if refresh and worker_browser:
+        worker_browser.stop()
+        worker_browser = None
     if not worker_browser:
         worker_browser = SwarmWorkerBrowser()
         worker_browser.start()
+        await asyncio.sleep(0.3)
     return {"hosts": worker_browser.get_hosts()}
 
 
@@ -485,11 +547,13 @@ async def start_worker_engine(req: StartWorkerEngineRequest):
         }
 
     local_ip = get_local_ip()
+    all_ips = get_all_local_ips()
     return {
         "success": True,
         "pid": res.get("pid"),
         "port": req.port or 8082,
         "endpoint": f"http://{local_ip}:{req.port or 8082}",
+        "endpoints": [f"http://{ip}:{req.port or 8082}" for ip in all_ips],
         "message": f"Worker engine is running on LAN at http://{local_ip}:{req.port or 8082}"
     }
 
@@ -515,11 +579,14 @@ async def worker_join_swarm(req: JoinSwarmRequest):
 
 @app.get("/api/worker/status")
 async def get_worker_status():
-    """Returns worker status including LAN IP and engine state."""
+    """Returns worker status including LAN IP, all adapter IPs, and engine state."""
     st = worker_agent.get_status()
     local_ip = get_local_ip()
+    all_ips = get_all_local_ips()
     st["local_ip"] = local_ip
+    st["all_local_ips"] = all_ips
     st["worker_endpoint"] = f"http://{local_ip}:{worker_agent.port}"
+    st["worker_endpoints"] = [f"http://{ip}:{worker_agent.port}" for ip in all_ips]
     return st
 
 

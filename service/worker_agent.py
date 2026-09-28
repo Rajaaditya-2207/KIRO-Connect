@@ -107,8 +107,11 @@ class WorkerAgent:
         while self.is_connected and self.host_endpoint:
             try:
                 url = f"{self.host_endpoint.rstrip('/')}/api/swarm/heartbeat"
+                headers = {}
+                if self.session_token:
+                    headers["Authorization"] = f"Bearer {self.session_token}"
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    await client.post(url, json={"worker_id": self.worker_id})
+                    await client.post(url, json={"worker_id": self.worker_id}, headers=headers)
             except Exception as e:
                 logger.debug(f"Heartbeat tick warning: {e}")
             await asyncio.sleep(10.0)

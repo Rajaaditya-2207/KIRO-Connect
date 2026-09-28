@@ -19,6 +19,7 @@ import uuid
 import hashlib
 import math
 import logging
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 
 import chromadb
@@ -26,7 +27,18 @@ from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
 logger = logging.getLogger("kiro.memory")
 
-DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "chroma_db")
+def get_default_db_dir() -> str:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        p = os.path.join(local_app_data, "KIRO-Connect", "chroma_db")
+        try:
+            os.makedirs(p, exist_ok=True)
+            return p
+        except Exception:
+            pass
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "chroma_db")
+
+DB_DIR = get_default_db_dir()
 
 
 class LocalFeatureEmbeddingFunction(EmbeddingFunction[Documents]):
@@ -65,6 +77,7 @@ class SwarmSharedMemory:
         self.embedding_fn = LocalFeatureEmbeddingFunction(dim=128)
         self.total_mappings_recorded = 0
         self.last_update_time: Optional[float] = None
+        self._lock = threading.Lock()
 
         try:
             self.client = chromadb.PersistentClient(path=self.persist_dir)
@@ -97,33 +110,34 @@ class SwarmSharedMemory:
         if not self.collection or not query.strip() or not right_thing.strip():
             return False
 
-        try:
-            mapping_id = f"map-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
-            metadata = {
-                "wrong_thing": (wrong_thing or "Divergent reasoning")[:2000],
-                "right_thing": right_thing[:2000],
-                "agent_name": agent_name[:100],
-                "divergence_score": float(divergence_score),
-                "consensus_confidence": float(consensus_confidence),
-                "timestamp": str(time.time())
-            }
+        with self._lock:
+            try:
+                mapping_id = f"map-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+                metadata = {
+                    "wrong_thing": (wrong_thing or "Divergent reasoning")[:2000],
+                    "right_thing": right_thing[:2000],
+                    "agent_name": agent_name[:100],
+                    "divergence_score": float(divergence_score),
+                    "consensus_confidence": float(consensus_confidence),
+                    "timestamp": str(time.time())
+                }
 
-            self.collection.add(
-                ids=[mapping_id],
-                documents=[query],
-                metadatas=[metadata]
-            )
-            self.total_mappings_recorded += 1
-            self.last_update_time = time.time()
+                self.collection.add(
+                    ids=[mapping_id],
+                    documents=[query],
+                    metadatas=[metadata]
+                )
+                self.total_mappings_recorded += 1
+                self.last_update_time = time.time()
 
-            logger.info(
-                f"[Shared Memory Updated] Host mapped mistake from agent '{agent_name}' "
-                f"for query: '{query[:40]}...' -> stored in shared memory state."
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Failed to update shared memory mapping: {e}")
-            return False
+                logger.info(
+                    f"[Shared Memory Updated] Host mapped mistake from agent '{agent_name}' "
+                    f"for query: '{query[:40]}...' -> stored in shared memory state."
+                )
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update shared memory mapping: {e}")
+                return False
 
     def record_session_consensus(self, query: str, consensus_answer: str, confidence: float = 1.0) -> bool:
         """
@@ -133,27 +147,28 @@ class SwarmSharedMemory:
         if not self.collection or not query.strip() or not consensus_answer.strip():
             return False
 
-        try:
-            doc_id = f"cons-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
-            metadata = {
-                "wrong_thing": "",  # Unanimous agreement
-                "right_thing": consensus_answer[:2000],
-                "agent_name": "Swarm Consensus",
-                "divergence_score": 0.0,
-                "consensus_confidence": float(confidence),
-                "timestamp": str(time.time())
-            }
-            self.collection.add(
-                ids=[doc_id],
-                documents=[query],
-                metadatas=[metadata]
-            )
-            self.total_mappings_recorded += 1
-            self.last_update_time = time.time()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to record session consensus in shared memory: {e}")
-            return False
+        with self._lock:
+            try:
+                doc_id = f"cons-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+                metadata = {
+                    "wrong_thing": "",  # Unanimous agreement
+                    "right_thing": consensus_answer[:2000],
+                    "agent_name": "Swarm Consensus",
+                    "divergence_score": 0.0,
+                    "consensus_confidence": float(confidence),
+                    "timestamp": str(time.time())
+                }
+                self.collection.add(
+                    ids=[doc_id],
+                    documents=[query],
+                    metadatas=[metadata]
+                )
+                self.total_mappings_recorded += 1
+                self.last_update_time = time.time()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to record session consensus in shared memory: {e}")
+                return False
 
     def query_shared_memory(
         self,
@@ -240,8 +255,32 @@ class SwarmSharedMemory:
         return self.map_and_update(query=query, wrong_thing=wrong_answer, right_thing=correct_answer)
 
     def get_all_corrections(self) -> List[Dict[str, Any]]:
-        count = self.get_session_count()
-        return [{"id": f"map-{i}", "query": "Host Swarm Mapping", "right_thing": "Internal"} for i in range(count)]
+        """Returns actual list of stored corrections from ChromaDB."""
+        if not self.collection:
+            return []
+        try:
+            with self._lock:
+                data = self.collection.get(include=["documents", "metadatas"])
+            items = []
+            ids = data.get("ids", [])
+            docs = data.get("documents", [])
+            metas = data.get("metadatas", [])
+            for i in range(len(ids)):
+                meta = metas[i] if i < len(metas) and metas[i] else {}
+                items.append({
+                    "id": ids[i],
+                    "query": docs[i] if i < len(docs) else "",
+                    "wrong_thing": meta.get("wrong_thing", ""),
+                    "right_thing": meta.get("right_thing", ""),
+                    "agent_name": meta.get("agent_name", "Unknown Node"),
+                    "divergence_score": meta.get("divergence_score", 0.0),
+                    "consensus_confidence": meta.get("consensus_confidence", 1.0),
+                    "timestamp": meta.get("timestamp", "")
+                })
+            return items
+        except Exception as e:
+            logger.error(f"Error fetching corrections from ChromaDB: {e}")
+            return []
 
 
 # Aliases for backward compatibility

@@ -51,28 +51,46 @@ class LlamaServerManager:
         return None
 
     @staticmethod
-    def scan_custom_directory(custom_dir: str) -> List[Dict[str, Any]]:
-        """Scans a custom user-provided directory path for GGUF model files."""
+    @staticmethod
+    def scan_custom_directory(custom_dir: str, max_depth: int = 4, max_results: int = 100) -> List[Dict[str, Any]]:
+        """Scans a custom user-provided directory path for GGUF model files with safety bounds."""
         candidates = []
         p = Path(custom_dir.strip().strip('"').strip("'"))
         if not p.exists() or not p.is_dir():
             return []
 
         seen_paths = set()
+        base_depth = len(p.parts)
         try:
-            for gguf_file in p.rglob("*.gguf"):
-                if "mmproj" in gguf_file.name.lower():
+            for root, dirs, files in os.walk(p, topdown=True):
+                current_depth = len(Path(root).parts) - base_depth
+                if current_depth >= max_depth:
+                    dirs.clear()
                     continue
-                resolved = str(gguf_file.resolve())
-                if resolved not in seen_paths:
-                    seen_paths.add(resolved)
-                    size_gb = round(gguf_file.stat().st_size / (1024 ** 3), 2)
-                    candidates.append({
-                        "name": gguf_file.name,
-                        "path": resolved,
-                        "size_gb": size_gb,
-                        "parent_folder": gguf_file.parent.name
-                    })
+                # Skip system and bulky non-model directories
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in (
+                    "windows", "$recycle.bin", "system volume information", "node_modules", ".venv", "appdata"
+                )]
+                for file in files:
+                    if file.lower().endswith(".gguf") and "mmproj" not in file.lower():
+                        full_path = os.path.join(root, file)
+                        try:
+                            resolved = str(Path(full_path).resolve())
+                            if resolved not in seen_paths:
+                                seen_paths.add(resolved)
+                                size_gb = round(os.path.getsize(full_path) / (1024 ** 3), 2)
+                                candidates.append({
+                                    "name": file,
+                                    "path": resolved,
+                                    "size_gb": size_gb,
+                                    "parent_folder": os.path.basename(root)
+                                })
+                                if len(candidates) >= max_results:
+                                    break
+                        except Exception:
+                            continue
+                if len(candidates) >= max_results:
+                    break
         except Exception as e:
             logger.error(f"Error scanning custom folder '{custom_dir}': {e}")
 
@@ -127,7 +145,8 @@ class LlamaServerManager:
 
     async def wait_until_ready(self, timeout_secs: float = 45.0) -> bool:
         """Polls the /health endpoint until the llama-server reports ready."""
-        url = f"http://{self.host}:{self.port}/health"
+        check_host = "127.0.0.1" if self.host in ("0.0.0.0", "", "::") else self.host
+        url = f"http://{check_host}:{self.port}/health"
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -209,7 +228,11 @@ class LlamaServerManager:
         logger.info(f"Starting llama-server: {' '.join(cmd)}")
 
         try:
-            logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "logs")
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if local_app_data:
+                logs_dir = os.path.join(local_app_data, "KIRO-Connect", "logs")
+            else:
+                logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "logs")
             os.makedirs(logs_dir, exist_ok=True)
             self.log_file_path = os.path.join(logs_dir, f"llama_server_{port}.log")
             self.log_file_handle = open(self.log_file_path, "a", encoding="utf-8")
@@ -230,12 +253,13 @@ class LlamaServerManager:
                 "alias": alias,
                 "pid": self.process.pid
             }
+            reported_host = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
             return {
                 "success": True,
                 "pid": self.process.pid,
                 "port": port,
                 "host": host,
-                "endpoint": f"http://{host}:{port}"
+                "endpoint": f"http://{reported_host}:{port}"
             }
         except Exception as e:
             logger.error(f"Failed to spawn llama-server: {e}")
@@ -270,12 +294,13 @@ class LlamaServerManager:
     def get_status(self) -> Dict[str, Any]:
         """Returns current operational status and hardware metrics."""
         running = self.is_running()
+        reported_host = "127.0.0.1" if self.host in ("0.0.0.0", "", "::") else self.host
         return {
             "running": running,
             "pid": self.process.pid if running else None,
             "port": self.port if running else None,
             "host": self.host if running else None,
-            "endpoint": f"http://{self.host}:{self.port}" if running else None,
+            "endpoint": f"http://{reported_host}:{self.port}" if running else None,
             "model_path": self.model_path if running else None,
             "uptime_seconds": round(time.time() - self.start_time, 1) if (running and self.start_time) else 0,
             "config": self.current_config if running else None,
@@ -296,7 +321,8 @@ class LlamaServerManager:
     @staticmethod
     def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
         """Checks if a TCP port is currently open and accepting connections."""
+        target_host = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
-            return s.connect_ex((host, port)) == 0
+            return s.connect_ex((target_host, port)) == 0
 

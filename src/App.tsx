@@ -4,18 +4,17 @@ import "./App.css";
 const API_BASE =
   typeof window !== "undefined" &&
   window.location.origin &&
-  (window.location.origin.startsWith("http://localhost:8000") ||
-   window.location.origin.startsWith("http://127.0.0.1:8000") ||
-   window.location.origin.startsWith("http://0.0.0.0:8000") ||
-   (window.location.port === "8000"))
+  (window.location.port !== "1420" && window.location.port !== "5173")
     ? window.location.origin
     : "http://127.0.0.1:8000";
 
 interface SwarmStatus {
   host_name: string;
   local_ip: string;
+  all_local_ips?: string[];
   gateway_port: number;
   gateway_endpoint: string;
+  gateway_endpoints?: string[];
   host_api_key: string;
   pairing_code: string;
   total_nodes: number;
@@ -61,7 +60,7 @@ interface LlamaStatus {
 
 export default function App() {
   const [mode, setMode] = useState<"host" | "worker">("host");
-  const [activeTab, setActiveTab] = useState<"overview" | "models" | "nodes" | "playground">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "playground" | "models" | "nodes">("overview");
 
   // Swarm & Node State
   const [swarmStatus, setSwarmStatus] = useState<SwarmStatus | null>(null);
@@ -82,11 +81,55 @@ export default function App() {
   const [benchmarkResults, setBenchmarkResults] = useState<any[]>([]);
 
   // MoA Playground State
-  const [promptInput, setPromptInput] = useState<string>(
-    "What are the key benefits of running a private Mixture-of-Agents inference swarm over LAN?"
+  const [playgroundPrompt, setPlaygroundPrompt] = useState<string>(
+    "Explain how decentralized peer-to-peer Mixture-of-Agents consensus prevents single-model hallucinations."
   );
-  const [isQuerying, setIsQuerying] = useState<boolean>(false);
-  const [queryResponse, setQueryResponse] = useState<any>(null);
+  const [playgroundTemperature, setPlaygroundTemperature] = useState<number>(0.7);
+  const [playgroundMaxTokens, setPlaygroundMaxTokens] = useState<number>(512);
+  const [isPlaygroundRunning, setIsPlaygroundRunning] = useState<boolean>(false);
+  const [playgroundResult, setPlaygroundResult] = useState<{
+    text: string;
+    confidence: number;
+    nodesParticipated: string[];
+    divergentNodes: any[];
+    memoryApplied: boolean;
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    latencyMs?: number;
+  } | null>(null);
+
+  // Non-blocking Toast State
+  const [toast, setToast] = useState<{ message: string; type: "success" | "info" | "error" } | null>(null);
+
+  const showToast = (message: string, type: "success" | "info" | "error" = "info") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  // Resilient Clipboard Copy Helper (works on HTTP and HTTPS)
+  const copyTextToClipboard = async (text: string, successMessage?: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      showToast(successMessage || "Copied to clipboard!", "success");
+      return true;
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      showToast("Failed to copy to clipboard", "error");
+      return false;
+    }
+  };
 
   // Worker Mode State
   const [workerHostEndpoint, setWorkerHostEndpoint] = useState<string>("");
@@ -95,12 +138,14 @@ export default function App() {
   const [workerEngineRunning, setWorkerEngineRunning] = useState<boolean>(false);
   const [isWorkerEngineStarting, setIsWorkerEngineStarting] = useState<boolean>(false);
   const [discoveredHosts, setDiscoveredHosts] = useState<any[]>([]);
+  const [isScanningHosts, setIsScanningHosts] = useState<boolean>(false);
   const [workerStatus, setWorkerStatus] = useState<{
     connected: boolean;
     session?: string;
     host?: string;
     error?: string;
     local_ip?: string;
+    all_local_ips?: string[];
   }>({ connected: false });
 
   // Polling loop
@@ -181,13 +226,13 @@ export default function App() {
           }
           setLocalModels(newModels);
           setSelectedModelPath(scanned[0].path);
-          alert(`Successfully discovered ${scanned.length} GGUF model(s) in custom folder!`);
+          showToast(`Successfully discovered ${scanned.length} GGUF model(s) in custom folder!`, "success");
         } else {
-          alert(`No .gguf model files were found in "${customFolderPath}".`);
+          showToast(`No .gguf model files were found in "${customFolderPath}".`, "info");
         }
       }
     } catch (e: any) {
-      alert("Error scanning custom folder: " + e.message);
+      showToast("Error scanning custom folder: " + e.message, "error");
     } finally {
       setIsScanningFolder(false);
     }
@@ -208,11 +253,13 @@ export default function App() {
       });
       const data = await res.json();
       if (!data.success) {
-        alert("Error launching llama-server: " + data.error);
+        showToast("Error launching llama-server: " + data.error, "error");
+      } else {
+        showToast("Host llama-server launched successfully!", "success");
       }
       fetchStatusAndNodes();
     } catch (e: any) {
-      alert("Failed to communicate with engine: " + e.message);
+      showToast("Failed to communicate with engine: " + e.message, "error");
     } finally {
       setIsLlamaStarting(false);
     }
@@ -221,6 +268,7 @@ export default function App() {
   const stopHostLlama = async () => {
     try {
       await fetch(`${API_BASE}/api/host/stop-llama`, { method: "POST" });
+      showToast("Host engine stopped.", "info");
       fetchStatusAndNodes();
     } catch (e) {
       console.error(e);
@@ -235,6 +283,7 @@ export default function App() {
         if (swarmStatus) {
           setSwarmStatus({ ...swarmStatus, pairing_code: data.pairing_code });
         }
+        showToast("Generated new 6-digit worker pairing code!", "success");
       }
     } catch (e) {
       console.error(e);
@@ -243,38 +292,55 @@ export default function App() {
 
   const copyApiKey = () => {
     if (swarmStatus?.host_api_key) {
-      navigator.clipboard.writeText(swarmStatus.host_api_key);
+      copyTextToClipboard(swarmStatus.host_api_key, "Swarm Host API Key copied to clipboard!");
       setCopiedKey(true);
       setTimeout(() => setCopiedKey(false), 2000);
     }
   };
 
-  const handleTestQuery = async () => {
-    if (!promptInput.trim() || !swarmStatus) return;
-    setIsQuerying(true);
-    setQueryResponse(null);
+  const handleRunPlayground = async () => {
+    if (!playgroundPrompt.trim()) {
+      showToast("Please enter a prompt to test swarm consensus.", "error");
+      return;
+    }
+    setIsPlaygroundRunning(true);
+    const startTime = Date.now();
     try {
       const res = await fetch(`${API_BASE}/v1/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${swarmStatus.host_api_key}`,
+          Authorization: `Bearer ${swarmStatus?.host_api_key || ""}`,
         },
         body: JSON.stringify({
-          messages: [{ role: "user", content: promptInput }],
+          model: "kiro-connect-moa",
+          messages: [{ role: "user", content: playgroundPrompt.trim() }],
+          temperature: playgroundTemperature,
+          max_tokens: playgroundMaxTokens,
+          stream: false,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setQueryResponse(data);
+      const data = await res.json();
+      const duration = Date.now() - startTime;
+      if (res.ok && data.choices && data.choices.length > 0) {
+        setPlaygroundResult({
+          text: data.choices[0].message?.content || "",
+          confidence: data.kiro_confidence ?? 1.0,
+          nodesParticipated: data.nodes_participated || [],
+          divergentNodes: data._divergent_candidates || [],
+          memoryApplied: data.shared_memory_applied || false,
+          usage: data.usage,
+          latencyMs: duration,
+        });
+        showToast("Swarm consensus inference complete!", "success");
+        fetchStatusAndNodes();
       } else {
-        const err = await res.json();
-        alert("Gateway Error: " + (err.detail || JSON.stringify(err)));
+        showToast(`Inference error: ${data.detail || data.error || "Unknown error"}`, "error");
       }
-    } catch (e: any) {
-      alert("Query execution failed: " + e.message);
+    } catch (err: any) {
+      showToast(`Inference failed: ${err.message}`, "error");
     } finally {
-      setIsQuerying(false);
+      setIsPlaygroundRunning(false);
     }
   };
 
@@ -294,9 +360,13 @@ export default function App() {
     }
   };
 
-  const fetchWorkerInfo = async () => {
+  const fetchWorkerInfo = async (forceRefresh = false) => {
+    if (forceRefresh) setIsScanningHosts(true);
     try {
-      const hostsRes = await fetch(`${API_BASE}/api/worker/discovered-hosts`);
+      const url = forceRefresh
+        ? `${API_BASE}/api/worker/discovered-hosts?refresh=true`
+        : `${API_BASE}/api/worker/discovered-hosts`;
+      const hostsRes = await fetch(url);
       if (hostsRes.ok) {
         const data = await hostsRes.json();
         setDiscoveredHosts(data.hosts || []);
@@ -313,16 +383,19 @@ export default function App() {
           connected: data.is_connected || false,
           host: data.host_endpoint || prev.host,
           local_ip: data.local_ip,
+          all_local_ips: data.all_local_ips,
         }));
       }
     } catch (e) {
       // Worker info loading
+    } finally {
+      if (forceRefresh) setIsScanningHosts(false);
     }
   };
 
   const startWorkerEngine = async () => {
     if (!selectedModelPath) {
-      alert("Please select a GGUF model for the worker node first.");
+      showToast("Please select a GGUF model for the worker node first.", "error");
       return;
     }
     setIsWorkerEngineStarting(true);
@@ -339,13 +412,13 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setWorkerEngineRunning(true);
-        alert(`Worker engine started on LAN at ${data.endpoint}!`);
+        showToast(`Worker engine started on LAN at ${data.endpoint}!`, "success");
       } else {
-        alert("Failed to start worker engine: " + (data.error || JSON.stringify(data)));
+        showToast("Failed to start worker engine: " + (data.error || JSON.stringify(data)), "error");
       }
       fetchWorkerInfo();
     } catch (e: any) {
-      alert("Error starting worker engine: " + e.message);
+      showToast("Error starting worker engine: " + e.message, "error");
     } finally {
       setIsWorkerEngineStarting(false);
     }
@@ -355,6 +428,7 @@ export default function App() {
     try {
       await fetch(`${API_BASE}/api/worker/stop-engine`, { method: "POST" });
       setWorkerEngineRunning(false);
+      showToast("Worker engine stopped.", "info");
       fetchWorkerInfo();
     } catch (e) {
       console.error(e);
@@ -367,6 +441,7 @@ export default function App() {
         method: "POST",
       });
       if (res.ok) {
+        showToast("Node restored to active inference pool!", "success");
         fetchStatusAndNodes();
       }
     } catch (e) {
@@ -376,7 +451,7 @@ export default function App() {
 
   const handleWorkerPair = async () => {
     if (!workerHostEndpoint || !workerPairingCode) {
-      alert("Please provide the host endpoint and 6-digit pairing code.");
+      showToast("Please provide the host endpoint and 6-digit pairing code.", "error");
       return;
     }
     try {
@@ -396,15 +471,15 @@ export default function App() {
           session: data.data?.session_token,
           host: data.data?.host_name || workerHostEndpoint,
         });
-        alert("Worker successfully authenticated and joined the swarm!");
+        showToast("Worker successfully authenticated and joined the swarm!", "success");
       } else {
         setWorkerStatus({ connected: false, error: data.error || data.detail });
-        alert("Pairing failed: " + (data.error || data.detail));
+        showToast("Pairing failed: " + (data.error || data.detail), "error");
       }
       fetchWorkerInfo();
     } catch (e: any) {
       setWorkerStatus({ connected: false, error: e.message });
-      alert("Pairing error: " + e.message);
+      showToast("Pairing error: " + e.message, "error");
     }
   };
 
@@ -446,6 +521,12 @@ export default function App() {
                 Overview
               </button>
               <button
+                className={`nav-tab-btn ${activeTab === "playground" ? "active" : ""}`}
+                onClick={() => setActiveTab("playground")}
+              >
+                ⚡ MoA Playground
+              </button>
+              <button
                 className={`nav-tab-btn ${activeTab === "models" ? "active" : ""}`}
                 onClick={() => setActiveTab("models")}
               >
@@ -456,12 +537,6 @@ export default function App() {
                 onClick={() => setActiveTab("nodes")}
               >
                 Swarm Fleet ({nodes.length})
-              </button>
-              <button
-                className={`nav-tab-btn ${activeTab === "playground" ? "active" : ""}`}
-                onClick={() => setActiveTab("playground")}
-              >
-                MoA Playground
               </button>
             </div>
           )}
@@ -546,9 +621,9 @@ export default function App() {
 
                     <div className="input-group">
                       <div className="input-label">
-                        <span>Gateway Base URL</span>
-                        <span className="copy-pill" onClick={() => navigator.clipboard.writeText(swarmStatus?.gateway_endpoint || "")}>
-                          Copy URL
+                        <span>Gateway Base URL ({swarmStatus?.all_local_ips?.length || 1} LAN Adapter{(swarmStatus?.all_local_ips?.length || 1) > 1 ? "s" : ""})</span>
+                        <span className="copy-pill" onClick={() => copyTextToClipboard(swarmStatus?.gateway_endpoint || "", "Gateway endpoint copied!")}>
+                          Copy Primary
                         </span>
                       </div>
                       <input
@@ -557,6 +632,21 @@ export default function App() {
                         className="input-field input-field-mono"
                         value={swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}
                       />
+                      {swarmStatus?.gateway_endpoints && swarmStatus.gateway_endpoints.length > 1 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" }}>
+                          {swarmStatus.gateway_endpoints.map((ep, i) => (
+                            <span
+                              key={i}
+                              className="copy-pill"
+                              style={{ fontSize: "10.5px" }}
+                              onClick={() => copyTextToClipboard(ep, `Copied adapter endpoint: ${ep}`)}
+                              title="Click to copy this LAN adapter endpoint"
+                            >
+                              📋 {ep}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="input-group">
@@ -607,6 +697,100 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Panel: OpenAI-Compatible Client Testing & Quickstart */}
+                <div className="panel" style={{ marginBottom: "16px" }}>
+                  <div className="panel-header">
+                    <div>
+                      <div className="panel-title">OpenAI-Compatible Testing & Client Quickstart</div>
+                      <div className="panel-subtitle">
+                        Test and query the swarm directly with standard OpenAI SDKs, cURL, or third-party web UIs
+                      </div>
+                    </div>
+                    <span className="panel-tag">Direct MoA Gateway</span>
+                  </div>
+
+                  <div className="grid-cards-2" style={{ gap: "14px" }}>
+                    <div>
+                      <div className="input-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <span style={{ fontWeight: 600 }}>Python (openai SDK)</span>
+                        <span
+                          className="copy-pill"
+                          onClick={() => {
+                            const code = `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}",\n    api_key="${swarmStatus?.host_api_key || "YOUR_KEY"}"\n)\n\nresponse = client.chat.completions.create(\n    model="kiro-connect-moa",\n    messages=[{"role": "user", "content": "Explain peer-to-peer MoA swarms."}]\n)\nprint(response.choices[0].message.content)`;
+                            copyTextToClipboard(code, "Python snippet copied!");
+                          }}
+                        >
+                          Copy Python
+                        </span>
+                      </div>
+                      <pre
+                        className="input-field-mono"
+                        style={{
+                          background: "var(--bg-input)",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          fontSize: "11px",
+                          color: "var(--accent-purple-light)",
+                          lineHeight: "1.5",
+                          whiteSpace: "pre-wrap",
+                          overflowX: "auto",
+                          margin: 0
+                        }}
+                      >
+{`from openai import OpenAI
+
+client = OpenAI(
+    base_url="${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}",
+    api_key="${swarmStatus?.host_api_key || "YOUR_KEY"}"
+)
+
+response = client.chat.completions.create(
+    model="kiro-connect-moa",
+    messages=[{"role": "user", "content": "Explain peer-to-peer MoA swarms."}]
+)
+print(response.choices[0].message.content)`}
+                      </pre>
+                    </div>
+
+                    <div>
+                      <div className="input-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <span style={{ fontWeight: 600 }}>cURL (Terminal CLI)</span>
+                        <span
+                          className="copy-pill"
+                          onClick={() => {
+                            const code = `curl -X POST "${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}/chat/completions" \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${swarmStatus?.host_api_key || "YOUR_KEY"}" \\\n  -d '{\n    "model": "kiro-connect-moa",\n    "messages": [{"role": "user", "content": "Hello Swarm"}]\n  }'`;
+                            copyTextToClipboard(code, "cURL snippet copied!");
+                          }}
+                        >
+                          Copy cURL
+                        </span>
+                      </div>
+                      <pre
+                        className="input-field-mono"
+                        style={{
+                          background: "var(--bg-input)",
+                          padding: "12px",
+                          borderRadius: "8px",
+                          fontSize: "11px",
+                          color: "var(--accent-emerald)",
+                          lineHeight: "1.5",
+                          whiteSpace: "pre-wrap",
+                          overflowX: "auto",
+                          margin: 0
+                        }}
+                      >
+{`curl -X POST "${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}/chat/completions" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${swarmStatus?.host_api_key || "YOUR_KEY"}" \\
+  -d '{
+    "model": "kiro-connect-moa",
+    "messages": [{"role": "user", "content": "Hello Swarm"}]
+  }'`}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Quick Fleet Snapshot */}
                 <div className="panel">
                   <div className="panel-header">
@@ -635,6 +819,169 @@ export default function App() {
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB: MOA SWARM PLAYGROUND */}
+            {activeTab === "playground" && (
+              <div>
+                <div className="panel" style={{ marginBottom: "20px" }}>
+                  <div className="panel-header">
+                    <div>
+                      <div className="panel-title">Interactive MoA Swarm Playground</div>
+                      <div className="panel-subtitle">
+                        Test decentralized Mixture-of-Agents consensus inference with real-time confidence & node alignment
+                      </div>
+                    </div>
+                    <span className="panel-tag">Live Swarm Execution</span>
+                  </div>
+
+                  <div className="chat-container">
+                    <div className="chat-input-box">
+                      <label className="input-label" style={{ marginBottom: "6px" }}>
+                        Prompt / Query to Swarm
+                      </label>
+                      <textarea
+                        className="chat-textarea"
+                        placeholder="Enter your prompt here... (e.g. Compare Rust and C++ for high-performance network services)"
+                        value={playgroundPrompt}
+                        onChange={(e) => setPlaygroundPrompt(e.target.value)}
+                        disabled={isPlaygroundRunning}
+                      />
+
+                      <div className="grid-cards-2" style={{ marginTop: "12px", gap: "14px" }}>
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <div className="input-label">
+                            <span>Temperature</span>
+                            <span style={{ color: "var(--accent-purple-light)", fontWeight: "bold" }}>
+                              {playgroundTemperature.toFixed(2)}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1.5"
+                            step="0.05"
+                            style={{ width: "100%", accentColor: "var(--accent-purple)" }}
+                            value={playgroundTemperature}
+                            onChange={(e) => setPlaygroundTemperature(parseFloat(e.target.value))}
+                            disabled={isPlaygroundRunning}
+                          />
+                        </div>
+
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <div className="input-label">
+                            <span>Max Tokens</span>
+                            <span style={{ color: "var(--accent-purple-light)", fontWeight: "bold" }}>
+                              {playgroundMaxTokens}
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="128"
+                            max="2048"
+                            step="128"
+                            style={{ width: "100%", accentColor: "var(--accent-purple)" }}
+                            value={playgroundMaxTokens}
+                            onChange={(e) => setPlaygroundMaxTokens(parseInt(e.target.value, 10))}
+                            disabled={isPlaygroundRunning}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="chat-action-bar">
+                        <div style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>
+                          {nodes.length > 0 ? (
+                            <span>Targeting {nodes.length} active node{nodes.length > 1 ? "s" : ""} on LAN</span>
+                          ) : (
+                            <span style={{ color: "var(--accent-rose)" }}>Warning: No swarm nodes active. Launch host engine or pair workers.</span>
+                          )}
+                        </div>
+                        <button
+                          className="btn-action btn-purple"
+                          disabled={isPlaygroundRunning || !playgroundPrompt.trim() || nodes.length === 0}
+                          onClick={handleRunPlayground}
+                        >
+                          {isPlaygroundRunning ? "Synthesizing Consensus..." : "⚡ Run Swarm Inference"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Result Output Card */}
+                    {playgroundResult && (
+                      <div className="chat-response-card" style={{ marginTop: "10px" }}>
+                        <div className="chat-meta-bar">
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                            <span
+                              className="pill"
+                              style={{
+                                background: playgroundResult.confidence >= 0.75 ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                                color: playgroundResult.confidence >= 0.75 ? "var(--accent-emerald)" : "var(--accent-amber)",
+                                border: `1px solid ${playgroundResult.confidence >= 0.75 ? "rgba(16, 185, 129, 0.3)" : "rgba(245, 158, 11, 0.3)"}`
+                              }}
+                            >
+                              ★ {(playgroundResult.confidence * 100).toFixed(0)}% Consensus Alignment
+                            </span>
+                            {playgroundResult.memoryApplied && (
+                              <span className="q4-kv-badge" style={{ fontSize: "10.5px" }}>
+                                🧠 Shared Memory Applied
+                              </span>
+                            )}
+                            {playgroundResult.latencyMs && (
+                              <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+                                ⏱️ {playgroundResult.latencyMs} ms
+                              </span>
+                            )}
+                            {playgroundResult.usage && (
+                              <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+                                📊 {playgroundResult.usage.completion_tokens} tokens
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className="copy-pill"
+                            onClick={() => copyTextToClipboard(playgroundResult.text, "Synthesized response copied!")}
+                          >
+                            📋 Copy Response
+                          </span>
+                        </div>
+
+                        <div className="chat-bubble-text">
+                          {playgroundResult.text}
+                        </div>
+
+                        {/* Contributing & Divergent Nodes */}
+                        <div style={{ marginTop: "14px", paddingTop: "10px", borderTop: "1px solid rgba(255, 255, 255, 0.05)", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>Participating Nodes:</span>
+                          {playgroundResult.nodesParticipated.length > 0 ? (
+                            playgroundResult.nodesParticipated.map((n, i) => (
+                              <span key={i} className="pill pill-idle" style={{ fontSize: "10.5px" }}>
+                                ✓ {n}
+                              </span>
+                            ))
+                          ) : (
+                            <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>Swarm default</span>
+                          )}
+
+                          {playgroundResult.divergentNodes && playgroundResult.divergentNodes.length > 0 && (
+                            <div style={{ width: "100%", marginTop: "6px" }}>
+                              <span style={{ fontSize: "11px", color: "var(--accent-rose)", fontWeight: "bold" }}>
+                                ⚠️ Filtered Divergent Proposals ({playgroundResult.divergentNodes.length}):
+                              </span>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
+                                {playgroundResult.divergentNodes.map((d: any, idx: number) => (
+                                  <span key={idx} className="pill pill-flagged" style={{ fontSize: "10px" }}>
+                                    {d.node_name || "Unknown node"} (score: {typeof d.divergence_score === "number" ? d.divergence_score.toFixed(2) : "divergent"})
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -887,118 +1234,6 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            {/* TAB: MOA PLAYGROUND */}
-            {activeTab === "playground" && (
-              <div className="grid-cards-3-2">
-                {/* Chat Panel */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">Interactive Swarm Playground</div>
-                      <div className="panel-subtitle">Dispatches queries through the unified OpenAI gateway</div>
-                    </div>
-                    <span className="panel-tag">Propose-then-Aggregate</span>
-                  </div>
-
-                  <div className="chat-container">
-                    <div className="chat-input-box">
-                      <textarea
-                        className="chat-textarea"
-                        value={promptInput}
-                        onChange={(e) => setPromptInput(e.target.value)}
-                        placeholder="Ask the swarm anything..."
-                      />
-                      <div className="chat-action-bar">
-                        <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>
-                          Fans out to {nodes.length} peer node(s)
-                        </span>
-                        <button
-                          className="btn-action btn-purple"
-                          disabled={isQuerying || nodes.length === 0}
-                          onClick={handleTestQuery}
-                        >
-                          {isQuerying ? "Synthesizing Answers..." : "Send Query"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {queryResponse && (
-                      <div className="chat-response-card">
-                        <div className="chat-meta-bar">
-                          <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                            <span style={{ color: "var(--accent-purple-light)", fontWeight: "bold" }}>
-                              Consensus Confidence: {Math.round((queryResponse.kiro_confidence || 0) * 100)}%
-                            </span>
-                            <span style={{ color: "var(--text-dim)", fontSize: "11px" }}>
-                              • {queryResponse.usage?.total_tokens || 0} tokens
-                            </span>
-                          </div>
-                          <span className="copy-pill" onClick={() => navigator.clipboard.writeText(queryResponse.choices?.[0]?.message?.content || "")}>
-                            Copy Response
-                          </span>
-                        </div>
-                        <div className="chat-bubble-text">
-                          {queryResponse.choices?.[0]?.message?.content}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Inspect Contributing Nodes Panel */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <div className="panel-title">MoA Orchestration Breakdown</div>
-                  </div>
-
-                  {queryResponse ? (
-                    <div>
-                      <div style={{ marginBottom: "12px" }}>
-                        <div className="input-label">Contributing Nodes</div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                          {(queryResponse.contributing_nodes || []).map((n: string, i: number) => (
-                            <span key={i} className="q4-kv-badge">{n}</span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {queryResponse.flagged_nodes && queryResponse.flagged_nodes.length > 0 && (
-                        <div style={{ marginBottom: "12px" }}>
-                          <div className="input-label" style={{ color: "var(--accent-rose)" }}>Flagged / Divergent Nodes</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                            {queryResponse.flagged_nodes.map((n: string, i: number) => (
-                              <span key={i} className="pill pill-flagged">{n}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {queryResponse.shared_memory_applied && (
-                        <div style={{ marginBottom: "12px" }}>
-                          <span className="pill pill-idle" style={{ color: "var(--accent-purple-light)", border: "1px solid var(--accent-purple)" }}>
-                            🧠 Grounded with Host Shared Memory Mappings
-                          </span>
-                        </div>
-                      )}
-
-                      <div style={{ fontSize: "11px", color: "var(--accent-emerald)", marginTop: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span>✓</span>
-                        <span>Host LLM orchestrator evaluated peer proposals and updated shared swarm memory.</span>
-                      </div>
-
-                      <div style={{ fontSize: "11.5px", color: "var(--text-dim)", marginTop: "14px", lineHeight: "1.6" }}>
-                        Queries are fanned out concurrently to all peer nodes on LAN. Each candidate output is scored using cross-model semantic agreement and token log probabilities. High-agreement answers are synthesized into the final response.
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ color: "var(--text-dim)", textAlign: "center", padding: "30px 0" }}>
-                      Dispatch a test prompt to inspect contributing node contributions and consensus metrics.
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         ) : (
           /* WORKER MODE */
@@ -1100,34 +1335,62 @@ export default function App() {
                 )}
               </div>
 
+              {/* Local Adapter Information & Refresh Bar */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", padding: "10px 14px", background: "var(--bg-input)", borderRadius: "8px" }}>
+                <div style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>
+                  Your LAN IP(s): <strong style={{ color: "var(--accent-purple-light)" }}>{workerStatus.all_local_ips?.join(", ") || workerStatus.local_ip || "Detecting..."}</strong>
+                </div>
+                <button
+                  type="button"
+                  className="btn-action btn-ghost"
+                  style={{ fontSize: "11px", padding: "4px 8px" }}
+                  disabled={isScanningHosts}
+                  onClick={() => fetchWorkerInfo(true)}
+                >
+                  {isScanningHosts ? "Scanning LAN (mDNS)..." : "🔄 Refresh LAN Discovery"}
+                </button>
+              </div>
+
               {/* Discovered Hosts on LAN */}
-              {discoveredHosts.length > 0 && (
-                <div style={{ marginBottom: "14px", padding: "12px", background: "var(--bg-input)", borderRadius: "8px" }}>
-                  <div style={{ fontSize: "11.5px", fontWeight: "700", color: "var(--accent-purple-light)", marginBottom: "8px" }}>
-                    Discovered Swarm Hosts on LAN (mDNS):
-                  </div>
+              <div style={{ marginBottom: "14px", padding: "12px", background: "var(--bg-input)", borderRadius: "8px" }}>
+                <div style={{ fontSize: "11.5px", fontWeight: "700", color: "var(--accent-purple-light)", marginBottom: "8px" }}>
+                  Discovered Swarm Hosts on LAN (mDNS):
+                </div>
+                {discoveredHosts.length > 0 ? (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                     {discoveredHosts.map((h, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        className="btn-action btn-ghost"
-                        style={{ fontSize: "11px", borderColor: workerHostEndpoint === h.endpoint ? "var(--accent-purple)" : undefined }}
-                        onClick={() => setWorkerHostEndpoint(h.endpoint)}
-                      >
-                        ✓ {h.display_name} ({h.endpoint})
-                      </button>
+                      <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                        {(h.endpoints && h.endpoints.length > 0 ? h.endpoints : [h.endpoint]).map((ep: string, epIdx: number) => (
+                          <button
+                            key={epIdx}
+                            type="button"
+                            className="btn-action btn-ghost"
+                            style={{
+                              fontSize: "11px",
+                              borderColor: workerHostEndpoint === ep ? "var(--accent-purple)" : undefined,
+                              background: workerHostEndpoint === ep ? "rgba(168, 85, 247, 0.15)" : undefined
+                            }}
+                            onClick={() => setWorkerHostEndpoint(ep)}
+                          >
+                            ✓ {h.display_name} ({ep})
+                          </button>
+                        ))}
+                      </div>
                     ))}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div style={{ fontSize: "11.5px", color: "var(--text-dim)", lineHeight: "1.5" }}>
+                    No hosts auto-discovered via mDNS yet. Ensure the Host has started KIRO-Connect on the same LAN / Wi-Fi network, or type the Host's IP address directly below.
+                  </div>
+                )}
+              </div>
 
               <div className="input-group">
                 <label className="input-label">Host Swarm Endpoint</label>
                 <input
                   type="text"
                   className="input-field"
-                  placeholder="e.g. http://192.168.1.100:8000"
+                  placeholder={workerStatus.local_ip ? `e.g. http://${workerStatus.local_ip}:8000` : "e.g. http://<host-ip>:8000"}
                   value={workerHostEndpoint}
                   onChange={(e) => setWorkerHostEndpoint(e.target.value)}
                 />
@@ -1175,6 +1438,19 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Global Non-blocking Toast Notification */}
+      {toast && (
+        <div className={`toast-banner toast-${toast.type}`}>
+          <span>{toast.message}</span>
+          <span
+            style={{ cursor: "pointer", marginLeft: "10px", fontWeight: "bold", opacity: 0.8 }}
+            onClick={() => setToast(null)}
+          >
+            ✕
+          </span>
+        </div>
+      )}
     </div>
   );
 }
