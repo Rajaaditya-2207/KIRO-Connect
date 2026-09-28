@@ -26,12 +26,12 @@ Using **llama.cpp** as the underlying execution engine, **Zeroconf (mDNS)** for 
 
 ## 📥 Windows Release Downloads
 
-Pre-built binaries for 64-bit Windows are available directly in the [`release/`](release/) folder:
+Pre-built binaries for 64-bit Windows are available from the official [GitHub Release v0.1.0](https://github.com/Rajaaditya-2207/KIRO-Connect/releases/tag/v0.1.0):
 
 | Release Artifact | File Link | Size | Description |
 | :--- | :--- | :--- | :--- |
-| **Windows NSIS Installer** | [**`KIRO-Connect-Installer.exe`**](release/KIRO-Connect-Installer.exe) | `1.92 MB` | Standard Windows setup wizard with desktop shortcut & start menu entry. |
-| **Standalone Portable EXE** | [**`KIRO-Connect.exe`**](release/KIRO-Connect.exe) | `5.01 MB` | Single-file portable desktop app built with Tauri v2. |
+| **Windows NSIS Installer** | [**`KIRO-Connect-Installer.exe`**](https://github.com/Rajaaditya-2207/KIRO-Connect/releases/download/v0.1.0/KIRO-Connect-Installer.exe) | `1.92 MB` | Standard Windows setup wizard with desktop shortcut & start menu entry. |
+| **Standalone Portable EXE** | [**`KIRO-Connect.exe`**](https://github.com/Rajaaditya-2207/KIRO-Connect/releases/download/v0.1.0/KIRO-Connect.exe) | `4.78 MB` | Single-file portable desktop app built with Tauri v2. |
 
 ---
 
