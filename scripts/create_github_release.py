@@ -24,7 +24,7 @@ Official Windows binaries for **KIRO-Connect: A Decentralized Peer-to-Peer Mixtu
 - **Decentralized LAN MoA:** Multi-layer Mixture-of-Agents reasoning across local computers.
 - **Dynamic 6-Digit PIN Security:** Private pairing handshake with session token authentication.
 - **Zeroconf (mDNS) Discovery:** Zero-configuration swarm discovery on LAN.
-- **ChromaDB Correction Memory:** Self-correcting RAG grounded in vector memory triples.
+- **Automated Host Shared Memory:** Autonomous orchestrator memory engine that maps agent proposal divergences against verified consensus ("wrong things" vs "right things") into shared ChromaDB state.
 - **llama.cpp Engine:** Native llama-server process lifecycle management.
 - **Custom Cyberpunk Theme:** Always-dark UI with real-time hardware telemetry and outlier detection.
 """
