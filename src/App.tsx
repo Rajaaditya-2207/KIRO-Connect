@@ -23,6 +23,8 @@ interface SwarmStatus {
   total_requests: number;
   total_tokens: number;
   is_broadcasting: boolean;
+  shared_memory_mappings?: number;
+  shared_memory_status?: string;
 }
 
 interface SwarmNode {
@@ -57,16 +59,9 @@ interface LlamaStatus {
   uptime_seconds: number;
 }
 
-interface CorrectionItem {
-  id: string;
-  query: string;
-  wrong_answer: string;
-  correct_answer: string;
-}
-
 export default function App() {
   const [mode, setMode] = useState<"host" | "worker">("host");
-  const [activeTab, setActiveTab] = useState<"overview" | "models" | "nodes" | "playground" | "memory">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "models" | "nodes" | "playground">("overview");
 
   // Swarm & Node State
   const [swarmStatus, setSwarmStatus] = useState<SwarmStatus | null>(null);
@@ -92,12 +87,6 @@ export default function App() {
   );
   const [isQuerying, setIsQuerying] = useState<boolean>(false);
   const [queryResponse, setQueryResponse] = useState<any>(null);
-
-  // Correction Memory State
-  const [corrections, setCorrections] = useState<CorrectionItem[]>([]);
-  const [corrQuery, setCorrQuery] = useState<string>("");
-  const [corrWrong, setCorrWrong] = useState<string>("");
-  const [corrRight, setCorrRight] = useState<string>("");
 
   // Worker Mode State
   const [workerHostEndpoint, setWorkerHostEndpoint] = useState<string>("");
@@ -137,7 +126,6 @@ export default function App() {
         }
       }
       fetchStatusAndNodes();
-      fetchCorrections();
     } catch (e) {
       console.warn("Backend starting or not yet connected:", e);
     }
@@ -164,18 +152,6 @@ export default function App() {
       }
     } catch (e) {
       // Offline or loading
-    }
-  };
-
-  const fetchCorrections = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/memory/list`);
-      if (res.ok) {
-        const data = await res.json();
-        setCorrections(data.corrections || []);
-      }
-    } catch (e) {
-      console.warn("Error fetching corrections:", e);
     }
   };
 
@@ -315,31 +291,6 @@ export default function App() {
       console.error(e);
     } finally {
       setIsBenchmarking(false);
-    }
-  };
-
-  const handleSaveCorrection = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!corrQuery || !corrWrong || !corrRight) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/memory/correct`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: corrQuery,
-          wrong_answer: corrWrong,
-          correct_answer: corrRight,
-        }),
-      });
-      if (res.ok) {
-        setCorrQuery("");
-        setCorrWrong("");
-        setCorrRight("");
-        fetchCorrections();
-        alert("Correction recorded in ChromaDB!");
-      }
-    } catch (e) {
-      console.error(e);
     }
   };
 
@@ -512,12 +463,6 @@ export default function App() {
               >
                 MoA Playground
               </button>
-              <button
-                className={`nav-tab-btn ${activeTab === "memory" ? "active" : ""}`}
-                onClick={() => setActiveTab("memory")}
-              >
-                Memory ({corrections.length})
-              </button>
             </div>
           )}
         </div>
@@ -566,6 +511,14 @@ export default function App() {
                       {(swarmStatus?.total_tokens || 0).toLocaleString()}
                     </div>
                     <div className="stat-widget-sub">Zero cloud API cost</div>
+                  </div>
+
+                  <div className="stat-widget">
+                    <div className="stat-widget-label">Shared Swarm Memory</div>
+                    <div className="stat-widget-val" style={{ color: "var(--accent-purple-light)" }}>
+                      {swarmStatus?.shared_memory_mappings || 0}
+                    </div>
+                    <div className="stat-widget-sub">Host auto-mapped (Wrong ➔ Right)</div>
                   </div>
 
                   <div className="stat-widget">
@@ -1021,6 +974,19 @@ export default function App() {
                         </div>
                       )}
 
+                      {queryResponse.shared_memory_applied && (
+                        <div style={{ marginBottom: "12px" }}>
+                          <span className="pill pill-idle" style={{ color: "var(--accent-purple-light)", border: "1px solid var(--accent-purple)" }}>
+                            🧠 Grounded with Host Shared Memory Mappings
+                          </span>
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: "11px", color: "var(--accent-emerald)", marginTop: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span>✓</span>
+                        <span>Host LLM orchestrator evaluated peer proposals and updated shared swarm memory.</span>
+                      </div>
+
                       <div style={{ fontSize: "11.5px", color: "var(--text-dim)", marginTop: "14px", lineHeight: "1.6" }}>
                         Queries are fanned out concurrently to all peer nodes on LAN. Each candidate output is scored using cross-model semantic agreement and token log probabilities. High-agreement answers are synthesized into the final response.
                       </div>
@@ -1028,93 +994,6 @@ export default function App() {
                   ) : (
                     <div style={{ color: "var(--text-dim)", textAlign: "center", padding: "30px 0" }}>
                       Dispatch a test prompt to inspect contributing node contributions and consensus metrics.
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* TAB: CORRECTION MEMORY */}
-            {activeTab === "memory" && (
-              <div className="grid-cards-2">
-                {/* Form */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">Teach Swarm Memory</div>
-                      <div className="panel-subtitle">Record query / mistake / correction triples in ChromaDB</div>
-                    </div>
-                    <span className="panel-tag">ChromaDB Vector Store</span>
-                  </div>
-
-                  <form onSubmit={handleSaveCorrection}>
-                    <div className="input-group">
-                      <label className="input-label">Query Pattern or Prompt</label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        placeholder="e.g. 'What is the capital of Australia?'"
-                        value={corrQuery}
-                        onChange={(e) => setCorrQuery(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <label className="input-label">Incorrect Swarm Output</label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        placeholder="e.g. 'Sydney'"
-                        value={corrWrong}
-                        onChange={(e) => setCorrWrong(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <label className="input-label">Correct Ground Truth</label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        placeholder="e.g. 'Canberra'"
-                        value={corrRight}
-                        onChange={(e) => setCorrRight(e.target.value)}
-                      />
-                    </div>
-
-                    <button type="submit" className="btn-action btn-purple" style={{ width: "100%", marginTop: "6px" }}>
-                      Store Correction Triple
-                    </button>
-                  </form>
-                </div>
-
-                {/* Stored Memory List */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <div className="panel-title">Stored Memories ({corrections.length})</div>
-                  </div>
-
-                  {corrections.length === 0 ? (
-                    <div style={{ textAlign: "center", padding: "30px 0", color: "var(--text-dim)" }}>
-                      No corrections recorded yet. When a node diverges or makes a mistake, teach it here!
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "320px", overflowY: "auto" }}>
-                      {corrections.map((c) => (
-                        <div
-                          key={c.id}
-                          style={{
-                            background: "var(--bg-input)",
-                            border: "1px solid var(--border-subtle)",
-                            borderRadius: "8px",
-                            padding: "10px",
-                            fontSize: "12px",
-                          }}
-                        >
-                          <div><strong>Query:</strong> {c.query}</div>
-                          <div style={{ color: "var(--accent-rose)", marginTop: "2px" }}>✗ Mistake: {c.wrong_answer}</div>
-                          <div style={{ color: "var(--accent-emerald)", marginTop: "2px" }}>✓ Correction: {c.correct_answer}</div>
-                        </div>
-                      ))}
                     </div>
                   )}
                 </div>

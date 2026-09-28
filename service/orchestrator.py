@@ -329,6 +329,12 @@ class MoAOrchestrator:
         # Contributing nodes list
         contributing_nodes = [r["node_name"] for r in valid_results]
 
+        # Extract divergent candidate proposals (WRONG THINGS to map against RIGHT THING)
+        divergent_candidates = [
+            r for r in valid_results
+            if agreement_map.get(r["node_id"], 1.0) < 0.65 or r["node_name"] in newly_flagged
+        ]
+
         # Phase 3: Synthesis / Aggregation (Reference: togethercomputer/MoA)
         # Find candidate with highest agreement to consensus
         best_candidate = max(valid_results, key=lambda x: agreement_map.get(x["node_id"], 0.0))
@@ -388,5 +394,15 @@ class MoAOrchestrator:
             "kiro_confidence": confidence,
             "contributing_nodes": contributing_nodes,
             "flagged_nodes": newly_flagged,
-            "swarm_tokens_computed": total_tokens_used
+            "swarm_tokens_computed": total_tokens_used,
+            "_divergent_candidates": [
+                {
+                    "node_id": c["node_id"],
+                    "node_name": c["node_name"],
+                    "content": c["content"],
+                    "divergence_score": round(1.0 - agreement_map.get(c["node_id"], 0.0), 3)
+                }
+                for c in divergent_candidates
+            ],
+            "_final_text": final_text
         }

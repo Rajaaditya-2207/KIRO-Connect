@@ -165,32 +165,56 @@ async def chat_completions(req: ChatCompletionRequest, auth: str = Depends(verif
     """
     messages_dicts = [{"role": m.role, "content": m.content} for m in req.messages]
 
-    # Check Correction Memory for past mistakes on similar prompts
+    # 1. Query Swarm Shared Memory for past mapped mistakes & consensus
     latest_user_prompt = ""
     for m in reversed(req.messages):
         if m.role == "user":
             latest_user_prompt = m.content
             break
 
-    correction_context = None
+    shared_memory_ctx = None
     if latest_user_prompt:
-        matches = memory.query_similar_corrections(latest_user_prompt, n_results=1)
-        if matches:
-            top_match = matches[0]
-            correction_context = (
-                f"Previous Similar Query: {top_match['matched_query']}\n"
-                f"Previous Incorrect Answer: {top_match['wrong_answer']}\n"
-                f"Correction: {top_match['correct_answer']}"
-            )
-            logger.info(f"Injecting correction memory for query: '{latest_user_prompt[:40]}...'")
+        shared_entry = memory.query_shared_memory(latest_user_prompt, n_results=1)
+        if shared_entry:
+            shared_memory_ctx = shared_entry["formatted_context"]
+            logger.info(f"[Shared Memory State] Injected learned mapping context for query: '{latest_user_prompt[:40]}...'")
 
     try:
         response = await orchestrator.execute_moa_pipeline(
             messages=messages_dicts,
-            correction_context=correction_context,
+            correction_context=shared_memory_ctx,
             temperature=req.temperature or 0.7,
             max_tokens=req.max_tokens or 1024
         )
+
+        # 2. Host Orchestrator automatically maps wrong things & right things into shared memory
+        if latest_user_prompt and response.get("choices"):
+            final_text = response["choices"][0]["message"]["content"]
+            divergent_candidates = response.get("_divergent_candidates", [])
+            confidence = response.get("kiro_confidence", 1.0)
+
+            if divergent_candidates:
+                # Map each wrong proposal to the verified right consensus
+                for div in divergent_candidates:
+                    memory.map_and_update(
+                        query=latest_user_prompt,
+                        wrong_thing=div["content"],
+                        right_thing=final_text,
+                        agent_name=div["node_name"],
+                        divergence_score=div.get("divergence_score", 0.0),
+                        consensus_confidence=confidence
+                    )
+            else:
+                # All nodes in consensus - reinforce shared memory
+                memory.record_session_consensus(
+                    query=latest_user_prompt,
+                    consensus_answer=final_text,
+                    confidence=confidence
+                )
+
+        if shared_memory_ctx:
+            response["shared_memory_applied"] = True
+
         return response
     except Exception as e:
         logger.error(f"MoA pipeline execution failed: {e}")
@@ -252,7 +276,7 @@ async def worker_heartbeat(req: HeartbeatRequest):
 
 @app.get("/api/swarm/status")
 async def swarm_status():
-    """Returns overall swarm status, gateway endpoint, and pairing code."""
+    """Returns overall swarm status, gateway endpoint, pairing code, and session memory stats."""
     local_ip = get_local_ip()
     return {
         "host_name": host_display_name,
@@ -265,7 +289,11 @@ async def swarm_status():
         "healthy_nodes": len(orchestrator.get_healthy_nodes()),
         "total_requests": orchestrator.total_gateway_requests,
         "total_tokens": orchestrator.total_gateway_tokens,
-        "is_broadcasting": broadcaster.is_broadcasting if broadcaster else False
+        "is_broadcasting": broadcaster.is_broadcasting if broadcaster else False,
+        "session_memory_count": memory.get_session_count(),
+        "shared_memory_mappings": memory.get_session_count(),
+        "shared_memory_status": "active_peer_shared",
+        "shared_memory_last_update": memory.last_update_time
     }
 
 
@@ -496,19 +524,23 @@ async def get_worker_status():
 
 
 # ============================================================================
-# Correction Memory APIs (ChromaDB)
+# Host Automated Session Memory APIs (Internal State)
 # ============================================================================
+
+@app.get("/api/memory/status")
+async def get_memory_status():
+    """Returns internal status of the host's automated session memory."""
+    return memory.get_status()
 
 @app.post("/api/memory/correct")
 async def add_correction(req: CorrectionRequest):
-    """Records a new (query, wrong_answer, correct_answer) triple in ChromaDB."""
+    """Internal compatibility helper to store a session correction in ChromaDB."""
     success = memory.store_correction(req.query, req.wrong_answer, req.correct_answer)
     return {"success": success}
 
-
 @app.get("/api/memory/list")
 async def list_corrections():
-    """Returns all stored correction memories."""
+    """Internal compatibility endpoint for stored correction memories."""
     items = memory.get_all_corrections()
     return {"corrections": items}
 
