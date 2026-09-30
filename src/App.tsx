@@ -1,11 +1,35 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import {
+  Network,
+  Cpu,
+  Database,
+  Activity,
+  ShieldCheck,
+  Key,
+  RefreshCw,
+  Play,
+  Square,
+  CheckCircle2,
+  Wifi,
+  Copy,
+  FolderSearch,
+  Zap,
+  Layers,
+  FileText,
+  Radio,
+  Code2,
+  Clock,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import NetworkGraph3D, { SwarmNode3D } from "./components/NetworkGraph3D";
 import "./App.css";
 
 const isTauri =
   typeof window !== "undefined" &&
   (window.location.origin.includes("tauri.localhost") ||
-   window.location.origin.startsWith("tauri://") ||
-   (window as any).__TAURI_INTERNALS__ !== undefined);
+    window.location.origin.startsWith("tauri://") ||
+    (window as any).__TAURI_INTERNALS__ !== undefined);
 
 const API_BASE = isTauri
   ? "http://127.0.0.1:8000"
@@ -13,8 +37,8 @@ const API_BASE = isTauri
     window.location.origin &&
     window.location.port !== "1420" &&
     window.location.port !== "5173"
-      ? window.location.origin
-      : "http://127.0.0.1:8000";
+  ? window.location.origin
+  : "http://127.0.0.1:8000";
 
 interface SwarmStatus {
   host_name: string;
@@ -32,22 +56,7 @@ interface SwarmStatus {
   is_broadcasting: boolean;
   shared_memory_mappings?: number;
   shared_memory_status?: string;
-}
-
-interface SwarmNode {
-  id: string;
-  name: string;
-  endpoint: string;
-  model: string;
-  hardware: string;
-  status: "idle" | "busy" | "flagged";
-  divergence_count: number;
-  total_prompts: number;
-  total_tokens: number;
-  last_latency_ms: number;
-  tokens_per_sec: number;
-  avg_tokens_per_sec: number;
-  is_host_local: boolean;
+  session_memory_count?: number;
 }
 
 interface LocalModel {
@@ -68,150 +77,177 @@ interface LlamaStatus {
 
 export default function App() {
   const [mode, setMode] = useState<"host" | "worker">("host");
-  const [activeTab, setActiveTab] = useState<"overview" | "playground" | "models" | "nodes">("overview");
+  const [hostTab, setHostTab] = useState<
+    "topology" | "gateway" | "fleet" | "models" | "memory" | "docs"
+  >("topology");
+  const [workerTab, setWorkerTab] = useState<
+    "telemetry" | "compute" | "security"
+  >("telemetry");
 
   // Swarm & Node State
   const [swarmStatus, setSwarmStatus] = useState<SwarmStatus | null>(null);
-  const [nodes, setNodes] = useState<SwarmNode[]>([]);
+  const [nodes, setNodes] = useState<SwarmNode3D[]>([]);
   const [hostLlamaStatus, setHostLlamaStatus] = useState<LlamaStatus | null>(null);
 
-  // Models & Custom Folder State
+  // Models & Scanner State
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [customFolderPath, setCustomFolderPath] = useState<string>("");
   const [isScanningFolder, setIsScanningFolder] = useState<boolean>(false);
   const [selectedModelPath, setSelectedModelPath] = useState<string>("");
   const [contextSize, setContextSize] = useState<number>(4096);
+  const [gpuLayers, setGpuLayers] = useState<number>(99);
   const [isLlamaStarting, setIsLlamaStarting] = useState<boolean>(false);
-  const [copiedKey, setCopiedKey] = useState<boolean>(false);
 
   // Benchmarking State
   const [isBenchmarking, setIsBenchmarking] = useState<boolean>(false);
   const [benchmarkResults, setBenchmarkResults] = useState<any[]>([]);
 
-  // MoA Playground State
-  const [playgroundPrompt, setPlaygroundPrompt] = useState<string>(
+  // Worker Mode State
+  const [workerHostIp, setWorkerHostIp] = useState<string>("");
+  const [workerPin, setWorkerPin] = useState<string>("");
+  const [workerModelPath, setWorkerModelPath] = useState<string>("");
+  const [workerStatus, setWorkerStatus] = useState<any>(null);
+  const [isWorkerStarting, setIsWorkerStarting] = useState<boolean>(false);
+  const [isWorkerJoining, setIsWorkerJoining] = useState<boolean>(false);
+  const [discoveredHosts, setDiscoveredHosts] = useState<any[]>([]);
+  const [isScanningHosts, setIsScanningHosts] = useState<boolean>(false);
+
+  // Shared Memory State
+  const [memoryCorrections, setMemoryCorrections] = useState<any[]>([]);
+
+  // Interactive API Docs Query State
+  const [docPrompt, setDocPrompt] = useState<string>(
     "Explain how decentralized peer-to-peer Mixture-of-Agents consensus prevents single-model hallucinations."
   );
-  const [playgroundTemperature, setPlaygroundTemperature] = useState<number>(0.7);
-  const [playgroundMaxTokens, setPlaygroundMaxTokens] = useState<number>(512);
-  const [isPlaygroundRunning, setIsPlaygroundRunning] = useState<boolean>(false);
-  const [playgroundResult, setPlaygroundResult] = useState<{
-    text: string;
-    confidence: number;
-    nodesParticipated: string[];
-    divergentNodes: any[];
-    memoryApplied: boolean;
-    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-    latencyMs?: number;
-  } | null>(null);
+  const [docResponse, setDocResponse] = useState<any>(null);
+  const [isDocQueryRunning, setIsDocQueryRunning] = useState<boolean>(false);
+  const [docActiveLang, setDocActiveLang] = useState<"python" | "curl" | "ts">(
+    "python"
+  );
 
-  // Non-blocking Toast State
-  const [toast, setToast] = useState<{ message: string; type: "success" | "info" | "error" } | null>(null);
+  // Toast Banner State
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const showToast = (message: string, type: "success" | "info" | "error" = "info") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3500);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3200);
   };
 
-  // Resilient Clipboard Copy Helper (works on HTTP and HTTPS)
-  const copyTextToClipboard = async (text: string, successMessage?: string) => {
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    showToast(`${label} copied to clipboard!`);
+  };
+
+  // 1. Polling and status fetching
+  const fetchStatusAndNodes = async () => {
     try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        textArea.style.top = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
+      const [resStatus, resNodes, resLlama] = await Promise.all([
+        fetch(`${API_BASE}/api/swarm/status`),
+        fetch(`${API_BASE}/api/swarm/nodes`),
+        fetch(`${API_BASE}/api/host/llama-status`),
+      ]);
+
+      if (resStatus.ok) {
+        const s = await resStatus.json();
+        setSwarmStatus(s);
       }
-      showToast(successMessage || "Copied to clipboard!", "success");
-      return true;
-    } catch (err) {
-      console.error("Failed to copy:", err);
-      showToast("Failed to copy to clipboard", "error");
-      return false;
+      if (resNodes.ok) {
+        const n = await resNodes.json();
+        setNodes(n.nodes || []);
+      }
+      if (resLlama.ok) {
+        const l = await resLlama.json();
+        setHostLlamaStatus(l);
+      }
+    } catch {
+      // Server may be offline during launch
     }
   };
 
-  // Worker Mode State
-  const [workerHostEndpoint, setWorkerHostEndpoint] = useState<string>("");
-  const [workerPairingCode, setWorkerPairingCode] = useState<string>("");
-  const [workerPort, setWorkerPort] = useState<number>(8082);
-  const [workerEngineRunning, setWorkerEngineRunning] = useState<boolean>(false);
-  const [isWorkerEngineStarting, setIsWorkerEngineStarting] = useState<boolean>(false);
-  const [discoveredHosts, setDiscoveredHosts] = useState<any[]>([]);
-  const [isScanningHosts, setIsScanningHosts] = useState<boolean>(false);
-  const [workerStatus, setWorkerStatus] = useState<{
-    connected: boolean;
-    session?: string;
-    host?: string;
-    error?: string;
-    local_ip?: string;
-    all_local_ips?: string[];
-  }>({ connected: false });
-
-  // Polling loop
-  useEffect(() => {
-    fetchInitialData();
-    const interval = setInterval(() => {
-      fetchStatusAndNodes();
-      if (mode === "worker") {
-        fetchWorkerInfo();
-      }
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [mode]);
-
-  const fetchInitialData = async () => {
+  const fetchLocalModels = async () => {
     try {
-      const modelsRes = await fetch(`${API_BASE}/api/host/local-models`);
-      if (modelsRes.ok) {
-        const data = await modelsRes.json();
+      const res = await fetch(`${API_BASE}/api/host/local-models`);
+      if (res.ok) {
+        const data = await res.json();
         setLocalModels(data.models || []);
         if (data.models && data.models.length > 0 && !selectedModelPath) {
           setSelectedModelPath(data.models[0].path);
+          if (!workerModelPath) {
+            setWorkerModelPath(data.models[0].path);
+          }
         }
       }
-      fetchStatusAndNodes();
     } catch (e) {
-      console.warn("Backend starting or not yet connected:", e);
+      console.error(e);
     }
   };
 
-  const fetchStatusAndNodes = async () => {
+  const fetchMemoryCorrections = async () => {
     try {
-      const statusRes = await fetch(`${API_BASE}/api/swarm/status`);
-      if (statusRes.ok) {
-        const data = await statusRes.json();
-        setSwarmStatus(data);
-      }
-
-      const nodesRes = await fetch(`${API_BASE}/api/swarm/nodes`);
-      if (nodesRes.ok) {
-        const data = await nodesRes.json();
-        setNodes(data.nodes || []);
-      }
-
-      const llamaRes = await fetch(`${API_BASE}/api/host/llama-status`);
-      if (llamaRes.ok) {
-        const data = await llamaRes.json();
-        setHostLlamaStatus(data);
+      const res = await fetch(`${API_BASE}/api/memory/list`);
+      if (res.ok) {
+        const data = await res.json();
+        setMemoryCorrections(data.corrections || []);
       }
     } catch (e) {
-      // Offline or loading
+      console.error(e);
     }
   };
 
-  // Custom Folder Scanner
-  const handleScanCustomFolder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customFolderPath.trim()) return;
+  const fetchWorkerStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/worker/status`);
+      if (res.ok) {
+        const st = await res.json();
+        setWorkerStatus(st);
+      }
+    } catch {
+      // Offline
+    }
+  };
+
+  const scanWorkerHosts = async () => {
+    setIsScanningHosts(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/worker/discovered-hosts?refresh=true`
+      );
+      if (res.ok) {
+        const d = await res.json();
+        setDiscoveredHosts(d.hosts || []);
+        showToast(
+          `Discovered ${d.hosts?.length || 0} active swarm hosts on LAN`
+        );
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsScanningHosts(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatusAndNodes();
+    fetchLocalModels();
+    fetchMemoryCorrections();
+
+    const interval = setInterval(() => {
+      if (mode === "host") {
+        fetchStatusAndNodes();
+      } else {
+        fetchWorkerStatus();
+      }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [mode]);
+
+  // Handle Custom Folder Scanning
+  const handleScanFolder = async () => {
+    if (!customFolderPath.trim()) {
+      showToast("Please enter a directory path to scan");
+      return;
+    }
     setIsScanningFolder(true);
     try {
       const res = await fetch(`${API_BASE}/api/host/scan-folder`, {
@@ -219,35 +255,35 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder_path: customFolderPath.trim() }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        const scanned: LocalModel[] = data.models || [];
-        if (scanned.length > 0) {
-          // Merge unique models
-          const existingPaths = new Set(localModels.map((m) => m.path));
-          const newModels = [...localModels];
-          for (const m of scanned) {
-            if (!existingPaths.has(m.path)) {
-              newModels.push(m);
-              existingPaths.add(m.path);
-            }
-          }
-          setLocalModels(newModels);
-          setSelectedModelPath(scanned[0].path);
-          showToast(`Successfully discovered ${scanned.length} GGUF model(s) in custom folder!`, "success");
-        } else {
-          showToast(`No .gguf model files were found in "${customFolderPath}".`, "info");
+      const data = await res.json();
+      if (res.ok && data.models) {
+        setLocalModels((prev) => {
+          const existing = new Set(prev.map((m) => m.path));
+          const additions = data.models.filter(
+            (m: LocalModel) => !existing.has(m.path)
+          );
+          return [...prev, ...additions];
+        });
+        if (data.models.length > 0) {
+          setSelectedModelPath(data.models[0].path);
         }
+        showToast(`Discovered ${data.count} GGUF models in directory`);
+      } else {
+        showToast("No GGUF models found in directory");
       }
-    } catch (e: any) {
-      showToast("Error scanning custom folder: " + e.message, "error");
+    } catch (err: any) {
+      showToast(`Scan error: ${err.message}`);
     } finally {
       setIsScanningFolder(false);
     }
   };
 
-  const startHostLlama = async () => {
-    if (!selectedModelPath) return;
+  // Start & Stop Host Engine
+  const handleStartHostEngine = async () => {
+    if (!selectedModelPath) {
+      showToast("Please select a GGUF model first");
+      return;
+    }
     setIsLlamaStarting(true);
     try {
       const res = await fetch(`${API_BASE}/api/host/start-llama`, {
@@ -257,61 +293,201 @@ export default function App() {
           model_path: selectedModelPath,
           ctx_size: contextSize,
           port: 8081,
+          n_gpu_layers: gpuLayers,
         }),
       });
       const data = await res.json();
-      if (!data.success) {
-        showToast("Error launching llama-server: " + data.error, "error");
+      if (res.ok && data.success) {
+        showToast("Host model engine started on port 8081!");
+        fetchStatusAndNodes();
       } else {
-        showToast("Host llama-server launched successfully!", "success");
+        showToast(`Failed to start engine: ${data.error || "Unknown error"}`);
       }
-      fetchStatusAndNodes();
-    } catch (e: any) {
-      showToast("Failed to communicate with engine: " + e.message, "error");
+    } catch (err: any) {
+      showToast(`Launch error: ${err.message}`);
     } finally {
       setIsLlamaStarting(false);
     }
   };
 
-  const stopHostLlama = async () => {
+  const handleStopHostEngine = async () => {
     try {
-      await fetch(`${API_BASE}/api/host/stop-llama`, { method: "POST" });
-      showToast("Host engine stopped.", "info");
-      fetchStatusAndNodes();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const refreshPairingCode = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/swarm/refresh-pairing-code`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/host/stop-llama`, {
+        method: "POST",
+      });
       if (res.ok) {
-        const data = await res.json();
-        if (swarmStatus) {
-          setSwarmStatus({ ...swarmStatus, pairing_code: data.pairing_code });
-        }
-        showToast("Generated new 6-digit worker pairing code!", "success");
+        showToast("Host model engine stopped cleanly");
+        fetchStatusAndNodes();
       }
     } catch (e) {
       console.error(e);
     }
   };
 
-  const copyApiKey = () => {
-    if (swarmStatus?.host_api_key) {
-      copyTextToClipboard(swarmStatus.host_api_key, "Swarm Host API Key copied to clipboard!");
-      setCopiedKey(true);
-      setTimeout(() => setCopiedKey(false), 2000);
+  // Refresh 6-digit PIN
+  const handleRefreshPin = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/swarm/refresh-pairing-code`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (swarmStatus) {
+          setSwarmStatus({ ...swarmStatus, pairing_code: d.pairing_code });
+        }
+        showToast("Generated new 6-digit session PIN!");
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const handleRunPlayground = async () => {
-    if (!playgroundPrompt.trim()) {
-      showToast("Please enter a prompt to test swarm consensus.", "error");
+  // Rotate Swarm Host API Key
+  const handleRotateApiKey = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/swarm/rotate-api-key`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (swarmStatus) {
+          setSwarmStatus({ ...swarmStatus, host_api_key: d.host_api_key });
+        }
+        showToast("Swarm Host API Key rotated to new secure key!");
+      }
+    } catch (e: any) {
+      showToast(`Key rotation error: ${e.message}`);
+    }
+  };
+
+  // Clear Session Memory
+  const handleClearMemory = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/memory/clear`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setMemoryCorrections([]);
+        if (swarmStatus) {
+          setSwarmStatus({ ...swarmStatus, session_memory_count: 0 });
+        }
+        showToast("ChromaDB session memory cleared!");
+      }
+    } catch (e: any) {
+      showToast(`Clear error: ${e.message}`);
+    }
+  };
+
+  // Run Fleet Benchmark
+  const handleRunBenchmark = async () => {
+    setIsBenchmarking(true);
+    setBenchmarkResults([]);
+    try {
+      const res = await fetch(`${API_BASE}/api/swarm/benchmark`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBenchmarkResults(data.results || []);
+        showToast("Fleet throughput benchmark completed!");
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsBenchmarking(false);
+    }
+  };
+
+  // Unflag a Node
+  const handleResetFlag = async (nodeId: string) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/swarm/nodes/${nodeId}/reset-flag`,
+        {
+          method: "POST",
+        }
+      );
+      if (res.ok) {
+        showToast("Node restored to active inference pool!");
+        fetchStatusAndNodes();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Worker Launch Engine
+  const handleStartWorkerEngine = async () => {
+    if (!workerModelPath) {
+      showToast("Select a model for the worker sub-agent");
       return;
     }
-    setIsPlaygroundRunning(true);
+    setIsWorkerStarting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/worker/start-engine`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_path: workerModelPath,
+          ctx_size: 4096,
+          port: 8082,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast("Worker sub-agent engine running on port 8082!");
+        fetchWorkerStatus();
+      } else {
+        showToast(`Worker engine error: ${data.error || "Failed to start"}`);
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    } finally {
+      setIsWorkerStarting(false);
+    }
+  };
+
+  // Worker Join Swarm
+  const handleWorkerJoinSwarm = async () => {
+    if (!workerHostIp.trim() || !workerPin.trim()) {
+      showToast("Provide both Host Endpoint and 6-digit PIN");
+      return;
+    }
+    setIsWorkerJoining(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/worker/join-swarm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host_endpoint: workerHostIp.trim(),
+          pairing_code: workerPin.trim(),
+          hardware: "Worker CPU/GPU",
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(
+          `Successfully authenticated with Host: ${data.host_name || "Swarm"}`
+        );
+        fetchWorkerStatus();
+      } else {
+        showToast(`Pairing rejected: ${data.detail || "Invalid PIN"}`);
+      }
+    } catch (err: any) {
+      showToast(`Pairing failed: ${err.message}`);
+    } finally {
+      setIsWorkerJoining(false);
+    }
+  };
+
+  // Interactive API Docs Query Execution
+  const handleExecuteDocQuery = async () => {
+    if (!docPrompt.trim()) {
+      showToast("Please enter a test prompt for the swarm");
+      return;
+    }
+    setIsDocQueryRunning(true);
+    setDocResponse(null);
     const startTime = Date.now();
     try {
       const res = await fetch(`${API_BASE}/v1/chat/completions`, {
@@ -322,1141 +498,1475 @@ export default function App() {
         },
         body: JSON.stringify({
           model: "kiro-connect-moa",
-          messages: [{ role: "user", content: playgroundPrompt.trim() }],
-          temperature: playgroundTemperature,
-          max_tokens: playgroundMaxTokens,
-          stream: false,
+          messages: [{ role: "user", content: docPrompt.trim() }],
+          temperature: 0.7,
+          max_tokens: 512,
         }),
       });
       const data = await res.json();
-      const duration = Date.now() - startTime;
-      if (res.ok && data.choices && data.choices.length > 0) {
-        setPlaygroundResult({
-          text: data.choices[0].message?.content || "",
-          confidence: data.kiro_confidence ?? 1.0,
-          nodesParticipated: data.nodes_participated || [],
-          divergentNodes: data._divergent_candidates || [],
-          memoryApplied: data.shared_memory_applied || false,
-          usage: data.usage,
-          latencyMs: duration,
+      const elapsed = Date.now() - startTime;
+      if (res.ok && data.choices) {
+        setDocResponse({
+          ...data,
+          client_latency_ms: elapsed,
         });
-        showToast("Swarm consensus inference complete!", "success");
+        showToast("Swarm responded with consensus validation!");
         fetchStatusAndNodes();
+        fetchMemoryCorrections();
       } else {
-        showToast(`Inference error: ${data.detail || data.error || "Unknown error"}`, "error");
+        showToast(`API error: ${data.detail || "Query failed"}`);
       }
     } catch (err: any) {
-      showToast(`Inference failed: ${err.message}`, "error");
+      showToast(`Query error: ${err.message}`);
     } finally {
-      setIsPlaygroundRunning(false);
+      setIsDocQueryRunning(false);
     }
   };
 
-  const handleRunBenchmark = async () => {
-    setIsBenchmarking(true);
-    setBenchmarkResults([]);
-    try {
-      const res = await fetch(`${API_BASE}/api/swarm/benchmark`, { method: "POST" });
-      if (res.ok) {
-        const data = await res.json();
-        setBenchmarkResults(data.results || []);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsBenchmarking(false);
-    }
-  };
-
-  const fetchWorkerInfo = async (forceRefresh = false) => {
-    if (forceRefresh) setIsScanningHosts(true);
-    try {
-      const url = forceRefresh
-        ? `${API_BASE}/api/worker/discovered-hosts?refresh=true`
-        : `${API_BASE}/api/worker/discovered-hosts`;
-      const hostsRes = await fetch(url);
-      if (hostsRes.ok) {
-        const data = await hostsRes.json();
-        setDiscoveredHosts(data.hosts || []);
-        if (data.hosts && data.hosts.length > 0 && !workerHostEndpoint) {
-          setWorkerHostEndpoint(data.hosts[0].endpoint);
-        }
-      }
-      const stRes = await fetch(`${API_BASE}/api/worker/status`);
-      if (stRes.ok) {
-        const data = await stRes.json();
-        setWorkerEngineRunning(data.llama_status?.running || false);
-        setWorkerStatus((prev) => ({
-          ...prev,
-          connected: data.is_connected || false,
-          host: data.host_endpoint || prev.host,
-          local_ip: data.local_ip,
-          all_local_ips: data.all_local_ips,
-        }));
-      }
-    } catch (e) {
-      // Worker info loading
-    } finally {
-      if (forceRefresh) setIsScanningHosts(false);
-    }
-  };
-
-  const startWorkerEngine = async () => {
-    if (!selectedModelPath) {
-      showToast("Please select a GGUF model for the worker node first.", "error");
-      return;
-    }
-    setIsWorkerEngineStarting(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/worker/start-engine`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model_path: selectedModelPath,
-          port: workerPort,
-          ctx_size: contextSize,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setWorkerEngineRunning(true);
-        showToast(`Worker engine started on LAN at ${data.endpoint}!`, "success");
-      } else {
-        showToast("Failed to start worker engine: " + (data.error || JSON.stringify(data)), "error");
-      }
-      fetchWorkerInfo();
-    } catch (e: any) {
-      showToast("Error starting worker engine: " + e.message, "error");
-    } finally {
-      setIsWorkerEngineStarting(false);
-    }
-  };
-
-  const stopWorkerEngine = async () => {
-    try {
-      await fetch(`${API_BASE}/api/worker/stop-engine`, { method: "POST" });
-      setWorkerEngineRunning(false);
-      showToast("Worker engine stopped.", "info");
-      fetchWorkerInfo();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleResetNodeFlag = async (nodeId: string) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/swarm/nodes/${nodeId}/reset-flag`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        showToast("Node restored to active inference pool!", "success");
-        fetchStatusAndNodes();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleWorkerPair = async () => {
-    if (!workerHostEndpoint || !workerPairingCode) {
-      showToast("Please provide the host endpoint and 6-digit pairing code.", "error");
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/api/worker/join-swarm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          host_endpoint: workerHostEndpoint.trim(),
-          pairing_code: workerPairingCode.trim(),
-          hardware: "Worker GPU/CPU",
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setWorkerStatus({
-          connected: true,
-          session: data.data?.session_token,
-          host: data.data?.host_name || workerHostEndpoint,
-        });
-        showToast("Worker successfully authenticated and joined the swarm!", "success");
-      } else {
-        setWorkerStatus({ connected: false, error: data.error || data.detail });
-        showToast("Pairing failed: " + (data.error || data.detail), "error");
-      }
-      fetchWorkerInfo();
-    } catch (e: any) {
-      setWorkerStatus({ connected: false, error: e.message });
-      showToast("Pairing error: " + e.message, "error");
-    }
-  };
+  const primaryEndpoint =
+    swarmStatus?.gateway_endpoint ||
+    `http://${swarmStatus?.local_ip || "127.0.0.1"}:8000/v1`;
 
   return (
     <div className="app-shell">
-      {/* Top Navigation */}
+      {/* Top Navigation Bar */}
       <header className="top-nav">
+        {/* Brand with Logo */}
         <div className="brand-wrapper">
-          <img src="/kiro-logo.png" className="kc-logo-img" alt="KIRO-Connect Logo" />
-          <div className="brand-text">
-            <h1>KIRO-Connect</h1>
-            <p>Peer-to-Peer LAN Mixture-of-Agents Inference Swarm</p>
+          <img
+            src="/kiro-logo.png"
+            className="kc-logo-img"
+            alt="KIRO-Connect Logo"
+          />
+          <div className="view-title-group">
+            <span className="brand-title">
+              KIRO-Connect
+              <span className="brand-badge">MOA SWARM</span>
+            </span>
+            <span className="brand-subtitle">
+              Decentralized Local Inference Network
+            </span>
           </div>
         </div>
 
-        {/* Center: Mode & Sub-Tabs */}
-        <div className="nav-center">
-          <div className="mode-toggle-group">
-            <button
-              className={`mode-toggle-btn ${mode === "host" ? "active" : ""}`}
-              onClick={() => setMode("host")}
-            >
-              Host Swarm
-            </button>
-            <button
-              className={`mode-toggle-btn ${mode === "worker" ? "active" : ""}`}
-              onClick={() => setMode("worker")}
-            >
-              Worker Node
-            </button>
-          </div>
+        {/* Mode Selector Toggle Group */}
+        <div className="mode-toggle-group">
+          <button
+            className={`mode-toggle-btn ${
+              mode === "host" ? "active-host" : ""
+            }`}
+            onClick={() => setMode("host")}
+          >
+            <ShieldCheck size={16} />
+            <span>Host Orchestrator</span>
+          </button>
+          <button
+            className={`mode-toggle-btn ${
+              mode === "worker" ? "active-worker" : ""
+            }`}
+            onClick={() => {
+              setMode("worker");
+              fetchWorkerStatus();
+              scanWorkerHosts();
+            }}
+          >
+            <Cpu size={16} />
+            <span>Worker Node</span>
+          </button>
+        </div>
 
+        {/* Right Status Cluster */}
+        <div className="nav-right-cluster">
           {mode === "host" && (
-            <div className="nav-tabs">
-              <button
-                className={`nav-tab-btn ${activeTab === "overview" ? "active" : ""}`}
-                onClick={() => setActiveTab("overview")}
-              >
-                Overview
-              </button>
-              <button
-                className={`nav-tab-btn ${activeTab === "playground" ? "active" : ""}`}
-                onClick={() => setActiveTab("playground")}
-              >
-                ⚡ MoA Playground
-              </button>
-              <button
-                className={`nav-tab-btn ${activeTab === "models" ? "active" : ""}`}
-                onClick={() => setActiveTab("models")}
-              >
-                Models & Engine
-              </button>
-              <button
-                className={`nav-tab-btn ${activeTab === "nodes" ? "active" : ""}`}
-                onClick={() => setActiveTab("nodes")}
-              >
-                Swarm Fleet ({nodes.length})
-              </button>
-            </div>
+            <button
+              className="network-badge-btn"
+              onClick={() => copyToClipboard(primaryEndpoint, "Base URL")}
+              title="Click to copy OpenAI-compatible Base URL"
+            >
+              <Key size={13} color="#a855f7" />
+              <span>{primaryEndpoint}</span>
+              <Copy size={12} color="#64748b" />
+            </button>
           )}
-        </div>
 
-        {/* Status Indicator */}
-        <div className="top-status-group">
-          {swarmStatus ? (
-            <div className="status-chip chip-online">
-              <span className="chip-dot"></span>
-              {swarmStatus.total_nodes} Node{swarmStatus.total_nodes !== 1 ? "s" : ""} Online
+          {mode === "host" ? (
+            <div className="status-chip online">
+              <span className="pulse-dot"></span>
+              <span>{nodes.length} Nodes Active</span>
+            </div>
+          ) : workerStatus?.is_paired ? (
+            <div className="status-chip online">
+              <span className="pulse-dot"></span>
+              <span>Paired with Swarm</span>
             </div>
           ) : (
-            <div className="status-chip chip-offline">
-              <span className="chip-dot"></span> Gateway Offline
+            <div className="status-chip offline">
+              <span className="pulse-dot"></span>
+              <span>Standalone Node</span>
             </div>
           )}
         </div>
       </header>
 
-      {/* Main Viewport */}
-      <main className="viewport">
-        {mode === "host" ? (
-          <div>
-            {/* TAB: OVERVIEW */}
-            {activeTab === "overview" && (
-              <div>
-                {/* 4 Stat Widgets */}
-                <div className="grid-cards-4">
-                  <div className="stat-widget">
-                    <div className="stat-widget-label">Swarm Nodes</div>
-                    <div className="stat-widget-val">{nodes.length}</div>
-                    <div className="stat-widget-sub">
-                      <span>{nodes.filter((n) => n.status !== "flagged").length} consensus-aligned</span>
+      {/* Body Layout: Left Sidebar + Viewport */}
+      <div className="body-layout">
+        {/* Dynamic Left Sidebar */}
+        <aside className="left-sidebar">
+          <div className="sidebar-nav-section">
+            <div className="sidebar-section-title">
+              {mode === "host" ? "Orchestrator Controls" : "Sub-Agent Controls"}
+            </div>
+
+            {mode === "host" ? (
+              <>
+                <button
+                  className={`sidebar-tab-btn ${
+                    hostTab === "topology" ? "active-host" : ""
+                  }`}
+                  onClick={() => setHostTab("topology")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Network size={16} />
+                    <span>3D Swarm Topology</span>
+                  </div>
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    hostTab === "gateway" ? "active-host" : ""
+                  }`}
+                  onClick={() => setHostTab("gateway")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Key size={16} />
+                    <span>Gateway & Endpoints</span>
+                  </div>
+                  <span className="sidebar-badge">v1</span>
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    hostTab === "fleet" ? "active-host" : ""
+                  }`}
+                  onClick={() => setHostTab("fleet")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Activity size={16} />
+                    <span>Worker Fleet</span>
+                  </div>
+                  <span className="sidebar-badge">{nodes.length}</span>
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    hostTab === "models" ? "active-host" : ""
+                  }`}
+                  onClick={() => setHostTab("models")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Cpu size={16} />
+                    <span>Model Engine</span>
+                  </div>
+                  {hostLlamaStatus?.running && (
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: "#10b981",
+                        boxShadow: "0 0 6px #10b981",
+                      }}
+                    ></span>
+                  )}
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    hostTab === "memory" ? "active-host" : ""
+                  }`}
+                  onClick={() => setHostTab("memory")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Database size={16} />
+                    <span>Shared Memory</span>
+                  </div>
+                  <span className="sidebar-badge">
+                    {swarmStatus?.session_memory_count || 0}
+                  </span>
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    hostTab === "docs" ? "active-host" : ""
+                  }`}
+                  onClick={() => setHostTab("docs")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <FileText size={16} />
+                    <span>API Documentation</span>
+                  </div>
+                  <span className="sidebar-badge">Docs</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className={`sidebar-tab-btn ${
+                    workerTab === "telemetry" ? "active-worker" : ""
+                  }`}
+                  onClick={() => setWorkerTab("telemetry")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Activity size={16} />
+                    <span>Node Telemetry</span>
+                  </div>
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    workerTab === "compute" ? "active-worker" : ""
+                  }`}
+                  onClick={() => setWorkerTab("compute")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Cpu size={16} />
+                    <span>Compute Engine</span>
+                  </div>
+                </button>
+
+                <button
+                  className={`sidebar-tab-btn ${
+                    workerTab === "security" ? "active-worker" : ""
+                  }`}
+                  onClick={() => setWorkerTab("security")}
+                >
+                  <div className="sidebar-tab-btn-content">
+                    <Radio size={16} />
+                    <span>Pairing & Discovery</span>
+                  </div>
+                  {discoveredHosts.length > 0 && (
+                    <span className="sidebar-badge">
+                      {discoveredHosts.length} found
+                    </span>
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="sidebar-footer">
+            <div className="sidebar-footer-card">
+              <div
+                style={{
+                  fontWeight: 700,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <Layers size={13} color="#a855f7" />
+                <span>MoA Swarm Protocol</span>
+              </div>
+              <div style={{ color: "#64748b", marginTop: 4, fontSize: "10.5px" }}>
+                Host synthesizes peer proposals. Zero data leaks off LAN.
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        {/* Main Content Viewport */}
+        <main className="main-viewport">
+          {mode === "host" ? (
+            <>
+              {/* TAB: 3D Swarm Topology */}
+              {hostTab === "topology" && (
+                <div className="graph-container">
+                  <NetworkGraph3D
+                    hostName={swarmStatus?.host_name || "Host Orchestrator"}
+                    hostIp={swarmStatus?.local_ip || "127.0.0.1"}
+                    hostPort={swarmStatus?.gateway_port || 8000}
+                    nodes={nodes}
+                  />
+
+                  {/* Overlay Stats */}
+                  <div className="graph-overlay-stats">
+                    <div className="graph-stat-pill">
+                      <ShieldCheck size={16} color="#c084fc" />
+                      <div>
+                        <div style={{ fontSize: "10.5px", color: "#94a3b8" }}>
+                          Orchestrator Core
+                        </div>
+                        <div style={{ fontWeight: 700 }}>
+                          {swarmStatus?.host_name || "Host-Local"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="graph-stat-pill">
+                      <Activity size={16} color="#06b6d4" />
+                      <div>
+                        <div style={{ fontSize: "10.5px", color: "#94a3b8" }}>
+                          Sub-Agent Fleet
+                        </div>
+                        <div style={{ fontWeight: 700 }}>
+                          {nodes.length} Nodes Connected
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="graph-stat-pill">
+                      <Database size={16} color="#10b981" />
+                      <div>
+                        <div style={{ fontSize: "10.5px", color: "#94a3b8" }}>
+                          Learned Shared Memory
+                        </div>
+                        <div style={{ fontWeight: 700 }}>
+                          {swarmStatus?.session_memory_count || 0} Corrected Patterns
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="stat-widget">
-                    <div className="stat-widget-label">Total Prompts</div>
-                    <div className="stat-widget-val">{swarmStatus?.total_requests || 0}</div>
-                    <div className="stat-widget-sub">Aggregated gateway requests</div>
-                  </div>
-
-                  <div className="stat-widget">
-                    <div className="stat-widget-label">Swarm Tokens</div>
-                    <div className="stat-widget-val">
-                      {(swarmStatus?.total_tokens || 0).toLocaleString()}
-                    </div>
-                    <div className="stat-widget-sub">Zero cloud API cost</div>
-                  </div>
-
-                  <div className="stat-widget">
-                    <div className="stat-widget-label">Shared Swarm Memory</div>
-                    <div className="stat-widget-val" style={{ color: "var(--accent-purple-light)" }}>
-                      {swarmStatus?.shared_memory_mappings || 0}
-                    </div>
-                    <div className="stat-widget-sub">Host auto-mapped (Wrong ➔ Right)</div>
-                  </div>
-
-                  <div className="stat-widget">
-                    <div className="stat-widget-label">Engine Status</div>
-                    <div className="stat-widget-val" style={{ fontSize: "18px", color: hostLlamaStatus?.running ? "var(--accent-emerald)" : "var(--accent-rose)" }}>
-                      {hostLlamaStatus?.running ? "RUNNING" : "STOPPED"}
-                    </div>
-                    <div className="stat-widget-sub">
-                      {hostLlamaStatus?.running ? `PID ${hostLlamaStatus.pid} on port ${hostLlamaStatus.port}` : "Launch in Models tab"}
-                    </div>
+                  {/* Bottom Controls */}
+                  <div className="graph-overlay-controls">
+                    <button
+                      className="cyber-btn cyber-btn-primary"
+                      onClick={() => setHostTab("docs")}
+                    >
+                      <Sparkles size={14} />
+                      <span>Test Swarm Query</span>
+                    </button>
                   </div>
                 </div>
+              )}
 
-                {/* Gateway & Authentication Grid */}
-                <div className="grid-cards-2">
-                  {/* Panel 1: Gateway Credentials */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <div>
-                        <div className="panel-title">Unified OpenAI Gateway Endpoint</div>
-                        <div className="panel-subtitle">External clients connect to this single endpoint</div>
-                      </div>
-                      <span className="panel-tag">v1/chat/completions</span>
-                    </div>
-
-                    <div className="input-group">
-                      <div className="input-label">
-                        <span>Gateway Base URL ({swarmStatus?.all_local_ips?.length || 1} LAN Adapter{(swarmStatus?.all_local_ips?.length || 1) > 1 ? "s" : ""})</span>
-                        <span className="copy-pill" onClick={() => copyTextToClipboard(swarmStatus?.gateway_endpoint || "", "Gateway endpoint copied!")}>
-                          Copy Primary
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        readOnly
-                        className="input-field input-field-mono"
-                        value={swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}
-                      />
-                      {swarmStatus?.gateway_endpoints && swarmStatus.gateway_endpoints.length > 1 && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" }}>
-                          {swarmStatus.gateway_endpoints.map((ep, i) => (
-                            <span
-                              key={i}
-                              className="copy-pill"
-                              style={{ fontSize: "10.5px" }}
-                              onClick={() => copyTextToClipboard(ep, `Copied adapter endpoint: ${ep}`)}
-                              title="Click to copy this LAN adapter endpoint"
-                            >
-                              📋 {ep}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="input-group">
-                      <div className="input-label">
-                        <span>Host Swarm API Key</span>
-                        <span className="copy-pill" onClick={copyApiKey}>
-                          {copiedKey ? "Copied!" : "Copy Key"}
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        readOnly
-                        className="input-field input-field-mono"
-                        value={swarmStatus?.host_api_key || "Loading..."}
-                      />
-                    </div>
-
-                    <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-                      <span className="q4-kv-badge">Model: kiro-connect-moa</span>
-                      <span className="q4-kv-badge">mDNS: _kiro-connect._tcp.local</span>
-                    </div>
-                  </div>
-
-                  {/* Panel 2: 6-Digit Pairing Code */}
-                  <div className="panel">
-                    <div className="panel-header">
-                      <div>
-                        <div className="panel-title">Worker Node Pairing Code</div>
-                        <div className="panel-subtitle">Single-use PIN to authenticate worker laptops</div>
-                      </div>
-                      <button className="btn-action btn-ghost" style={{ padding: "4px 8px", fontSize: "11px" }} onClick={refreshPairingCode}>
-                        Regenerate
-                      </button>
-                    </div>
-
-                    <div className="pairing-cluster">
-                      <div className="code-row">
-                        {(swarmStatus?.pairing_code || "------").split("").map((ch, i) => (
-                          <div key={i} className="code-cell">
-                            {ch}
-                          </div>
-                        ))}
-                      </div>
-                      <p style={{ color: "var(--text-dim)", fontSize: "11.5px", textAlign: "center" }}>
-                        Enter this 6-digit code on any worker laptop running KIRO-Connect on your LAN.
+              {/* TAB: Gateway & Endpoints */}
+              {hostTab === "gateway" && (
+                <div className="view-container">
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Key size={22} color="#a855f7" />
+                        Gateway & Access Endpoints
+                      </h1>
+                      <p className="view-subtitle">
+                        Standard OpenAI-compatible inference endpoint and 6-digit
+                        session PIN for worker authentication.
                       </p>
                     </div>
                   </div>
-                </div>
 
-                {/* Panel: OpenAI-Compatible Client Testing & Quickstart */}
-                <div className="panel" style={{ marginBottom: "16px" }}>
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">OpenAI-Compatible Testing & Client Quickstart</div>
-                      <div className="panel-subtitle">
-                        Test and query the swarm directly with standard OpenAI SDKs, cURL, or third-party web UIs
-                      </div>
-                    </div>
-                    <span className="panel-tag">Direct MoA Gateway</span>
-                  </div>
-
-                  <div className="grid-cards-2" style={{ gap: "14px" }}>
-                    <div>
-                      <div className="input-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                        <span style={{ fontWeight: 600 }}>Python (openai SDK)</span>
+                  <div className="grid-3">
+                    <div className="cyber-card highlight">
+                      <div className="card-header">
+                        <span className="card-title">
+                          <Key size={16} color="#a855f7" />
+                          OpenAI-Compatible Base URL
+                        </span>
                         <span
                           className="copy-pill"
-                          onClick={() => {
-                            const code = `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}",\n    api_key="${swarmStatus?.host_api_key || "YOUR_KEY"}"\n)\n\nresponse = client.chat.completions.create(\n    model="kiro-connect-moa",\n    messages=[{"role": "user", "content": "Explain peer-to-peer MoA swarms."}]\n)\nprint(response.choices[0].message.content)`;
-                            copyTextToClipboard(code, "Python snippet copied!");
-                          }}
+                          onClick={() =>
+                            copyToClipboard(primaryEndpoint, "Base URL")
+                          }
                         >
-                          Copy Python
+                          <Copy size={12} />
+                          Copy
                         </span>
                       </div>
-                      <pre
-                        className="input-field-mono"
+                      <input
+                        type="text"
+                        readOnly
+                        className="cyber-input cyber-input-mono"
+                        value={primaryEndpoint}
+                      />
+                      <div
                         style={{
-                          background: "var(--bg-input)",
-                          padding: "12px",
-                          borderRadius: "8px",
                           fontSize: "11px",
-                          color: "var(--accent-purple-light)",
-                          lineHeight: "1.5",
-                          whiteSpace: "pre-wrap",
-                          overflowX: "auto",
-                          margin: 0
+                          color: "#94a3b8",
+                          display: "flex",
+                          gap: 8,
+                          flexWrap: "wrap",
                         }}
                       >
-{`from openai import OpenAI
+                        <span className="q4-kv-badge">Port: 8000</span>
+                        <span className="q4-kv-badge">Model: kiro-connect-moa</span>
+                      </div>
+                    </div>
+
+                    <div className="cyber-card highlight">
+                      <div className="card-header">
+                        <span className="card-title">
+                          <ShieldCheck size={16} color="#a855f7" />
+                          Generated Host API Key
+                        </span>
+                        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                          <button
+                            className="cyber-btn cyber-btn-secondary"
+                            style={{ padding: "4px 8px", fontSize: "11px" }}
+                            onClick={handleRotateApiKey}
+                            title="Rotate to a new secure Host Swarm API Key"
+                          >
+                            <RefreshCw size={11} />
+                            Rotate Key
+                          </button>
+                          <span
+                            className="copy-pill"
+                            onClick={() =>
+                              copyToClipboard(
+                                swarmStatus?.host_api_key || "",
+                                "Host API Key"
+                              )
+                            }
+                          >
+                            <Copy size={12} />
+                            Copy Key
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        readOnly
+                        className="cyber-input cyber-input-mono"
+                        value={swarmStatus?.host_api_key || "Loading..."}
+                      />
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>
+                        Required in Authorization: Bearer header for all calls. Click Rotate to revoke and generate a new key.
+                      </div>
+                    </div>
+
+                    <div className="cyber-card">
+                      <div className="card-header">
+                        <span className="card-title">
+                          <Radio size={16} color="#06b6d4" />
+                          Worker 6-Digit PIN
+                        </span>
+                        <button
+                          className="cyber-btn cyber-btn-secondary"
+                          style={{ padding: "4px 8px", fontSize: "11px" }}
+                          onClick={handleRefreshPin}
+                        >
+                          <RefreshCw size={12} />
+                          Refresh
+                        </button>
+                      </div>
+                      <div className="pin-display-cluster">
+                        {(swarmStatus?.pairing_code || "123456")
+                          .split("")
+                          .map((digit, idx) => (
+                            <div key={idx} className="pin-digit-box">
+                              {digit}
+                            </div>
+                          ))}
+                      </div>
+                      <div
+                        style={{
+                          textAlign: "center",
+                          fontSize: "11px",
+                          color: "#64748b",
+                        }}
+                      >
+                        Enter on Worker laptops to join this swarm
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Reachable LAN Adapters */}
+                  {swarmStatus?.gateway_endpoints &&
+                    swarmStatus.gateway_endpoints.length > 1 && (
+                      <div className="cyber-card">
+                        <span className="card-title">
+                          <Wifi size={16} color="#06b6d4" />
+                          All Reachable LAN Network Adapters
+                        </span>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          {swarmStatus.gateway_endpoints.map((ep, i) => (
+                            <button
+                              key={i}
+                              className="network-badge-btn"
+                              onClick={() => copyToClipboard(ep, "LAN Endpoint")}
+                            >
+                              <Wifi size={12} color="#06b6d4" />
+                              <span>{ep}</span>
+                              <Copy size={12} color="#64748b" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                </div>
+              )}
+
+              {/* TAB: Worker Fleet */}
+              {hostTab === "fleet" && (
+                <div className="view-container">
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Activity size={22} color="#a855f7" />
+                        Sub-Agent Swarm Fleet
+                      </h1>
+                      <p className="view-subtitle">
+                        Connected worker nodes acting as sub-agents running local
+                        models with Q4 KV caches.
+                      </p>
+                    </div>
+
+                    <button
+                      className="cyber-btn cyber-btn-primary"
+                      onClick={handleRunBenchmark}
+                      disabled={isBenchmarking || nodes.length === 0}
+                    >
+                      <Zap size={15} />
+                      <span>
+                        {isBenchmarking ? "Benchmarking..." : "Benchmark Fleet"}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="cyber-card">
+                    <table className="cyber-table">
+                      <thead>
+                        <tr>
+                          <th>Sub-Agent Node</th>
+                          <th>Role</th>
+                          <th>Endpoint</th>
+                          <th>Model</th>
+                          <th>Speed</th>
+                          <th>Latency</th>
+                          <th>Divergence</th>
+                          <th>Status</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {nodes.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={9}
+                              style={{
+                                textAlign: "center",
+                                color: "#64748b",
+                                padding: 24,
+                              }}
+                            >
+                              No sub-agents currently connected. Launch host
+                              engine or pair worker laptops.
+                            </td>
+                          </tr>
+                        ) : (
+                          nodes.map((node) => (
+                            <tr key={node.id}>
+                              <td style={{ fontWeight: 700, color: "#fff" }}>
+                                {node.name}
+                              </td>
+                              <td>
+                                <span
+                                  className="q4-kv-badge"
+                                  style={{
+                                    borderColor: node.is_host_local
+                                      ? "#8b5cf6"
+                                      : "#06b6d4",
+                                    color: node.is_host_local
+                                      ? "#c084fc"
+                                      : "#06b6d4",
+                                  }}
+                                >
+                                  {node.is_host_local
+                                    ? "Orchestrator"
+                                    : "Sub-Agent"}
+                                </span>
+                              </td>
+                              <td style={{ fontFamily: "monospace" }}>
+                                {node.endpoint}
+                              </td>
+                              <td style={{ color: "#94a3b8" }}>{node.model}</td>
+                              <td style={{ color: "#10b981", fontWeight: 600 }}>
+                                {node.tokens_per_sec || 0} t/s
+                              </td>
+                              <td style={{ color: "#f8fafc" }}>
+                                {node.last_latency_ms || 0} ms
+                              </td>
+                              <td>
+                                <span
+                                  style={{
+                                    color:
+                                      node.divergence_count > 0
+                                        ? "#f43f5e"
+                                        : "#64748b",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {node.divergence_count}
+                                </span>
+                              </td>
+                              <td>
+                                <span
+                                  className={`status-chip ${
+                                    node.status === "flagged"
+                                      ? "offline"
+                                      : "online"
+                                  }`}
+                                  style={{ padding: "3px 8px" }}
+                                >
+                                  {node.status}
+                                </span>
+                              </td>
+                              <td>
+                                {node.status === "flagged" && (
+                                  <button
+                                    className="cyber-btn cyber-btn-secondary"
+                                    style={{
+                                      padding: "4px 8px",
+                                      fontSize: "11px",
+                                    }}
+                                    onClick={() => handleResetFlag(node.id)}
+                                  >
+                                    Restore
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Benchmark Results Display */}
+                  {benchmarkResults.length > 0 && (
+                    <div className="cyber-card">
+                      <span className="card-title">
+                        <Zap size={16} color="#f59e0b" />
+                        Relative Fleet Performance
+                      </span>
+                      <div className="grid-3">
+                        {benchmarkResults.map((r, i) => (
+                          <div key={i} className="stat-box">
+                            <span className="stat-box-label">{r.node_name}</span>
+                            <span className="stat-box-val">
+                              {r.tokens_per_sec} t/s
+                            </span>
+                            <span className="stat-box-sub">
+                              Latency: {r.latency_ms} ms ({r.tokens} tokens)
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB: Model Engine */}
+              {hostTab === "models" && (
+                <div className="view-container">
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Cpu size={22} color="#a855f7" />
+                        Host Model & Engine Configuration
+                      </h1>
+                      <p className="view-subtitle">
+                        Configure the stronger primary LLM model for the Host
+                        Orchestrator with Q4 KV Cache.
+                      </p>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10 }}>
+                      {hostLlamaStatus?.running ? (
+                        <button
+                          className="cyber-btn cyber-btn-danger"
+                          onClick={handleStopHostEngine}
+                        >
+                          <Square size={14} />
+                          <span>Stop Host Engine</span>
+                        </button>
+                      ) : (
+                        <button
+                          className="cyber-btn cyber-btn-primary"
+                          onClick={handleStartHostEngine}
+                          disabled={isLlamaStarting || !selectedModelPath}
+                        >
+                          <Play size={14} />
+                          <span>
+                            {isLlamaStarting ? "Starting..." : "Start Host Engine"}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid-2">
+                    {/* Discovered Models & Scanner */}
+                    <div className="cyber-card">
+                      <span className="card-title">
+                        <FolderSearch size={16} color="#a855f7" />
+                        Custom Directory Scanner & GGUF Models
+                      </span>
+
+                      <div className="input-group">
+                        <label className="input-label">
+                          <span>Custom Folder Path on Disk</span>
+                        </label>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <input
+                            type="text"
+                            placeholder="e.g. C:\Models or D:\LLMs"
+                            className="cyber-input"
+                            value={customFolderPath}
+                            onChange={(e) =>
+                              setCustomFolderPath(e.target.value)
+                            }
+                          />
+                          <button
+                            className="cyber-btn cyber-btn-secondary"
+                            onClick={handleScanFolder}
+                            disabled={isScanningFolder}
+                          >
+                            <FolderSearch size={14} />
+                            <span>
+                              {isScanningFolder ? "Scanning..." : "Scan"}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="input-group">
+                        <label className="input-label">
+                          <span>Select Active Model ({localModels.length} found)</span>
+                        </label>
+                        <select
+                          className="cyber-select"
+                          value={selectedModelPath}
+                          onChange={(e) => setSelectedModelPath(e.target.value)}
+                        >
+                          {localModels.length === 0 ? (
+                            <option value="">No GGUF models discovered</option>
+                          ) : (
+                            localModels.map((m) => (
+                              <option key={m.path} value={m.path}>
+                                {m.name} ({m.size_gb} GB)
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <span className="q4-kv-badge">KV Cache: Q4 Quantized</span>
+                        <span className="q4-kv-badge">Host Port: 8081</span>
+                      </div>
+                    </div>
+
+                    {/* Parameters & Runtime Status */}
+                    <div className="cyber-card">
+                      <span className="card-title">
+                        <Layers size={16} color="#06b6d4" />
+                        Engine Parameters & Runtime
+                      </span>
+
+                      <div className="input-group">
+                        <label className="input-label">
+                          <span>Context Window: {contextSize} tokens</span>
+                        </label>
+                        <input
+                          type="range"
+                          min="2048"
+                          max="32768"
+                          step="2048"
+                          value={contextSize}
+                          onChange={(e) =>
+                            setContextSize(Number(e.target.value))
+                          }
+                          style={{ width: "100%", accentColor: "#8b5cf6" }}
+                        />
+                      </div>
+
+                      <div className="input-group">
+                        <label className="input-label">
+                          <span>GPU Offload Layers (99 = full VRAM)</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="99"
+                          className="cyber-input"
+                          value={gpuLayers}
+                          onChange={(e) => setGpuLayers(Number(e.target.value))}
+                        />
+                      </div>
+
+                      <div className="stat-box" style={{ marginTop: 8 }}>
+                        <span className="stat-box-label">Runtime Engine Status</span>
+                        <span className="stat-box-val" style={{ fontSize: "15px" }}>
+                          {hostLlamaStatus?.running ? (
+                            <span style={{ color: "#10b981" }}>
+                              Online (PID: {hostLlamaStatus.pid}, Port:{" "}
+                              {hostLlamaStatus.port})
+                            </span>
+                          ) : (
+                            <span style={{ color: "#64748b" }}>Offline</span>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: Shared Memory */}
+              {hostTab === "memory" && (
+                <div className="view-container">
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Database size={22} color="#a855f7" />
+                        Swarm Shared Memory State (Live ChromaDB)
+                      </h1>
+                      <p className="view-subtitle">
+                        100% Live Vector Memory (No Mocks). Dynamically updated during the active session by the Host Orchestrator when any worker sub-agent diverges.
+                      </p>
+                    </div>
+
+                    <button
+                      className="cyber-btn cyber-btn-secondary"
+                      onClick={handleClearMemory}
+                      title="Clear session memory to prevent storage buildup"
+                    >
+                      <Trash2 size={14} color="#f43f5e" />
+                      <span>Clear Session Storage</span>
+                    </button>
+                  </div>
+
+                  <div className="grid-3">
+                    <div className="stat-box">
+                      <span className="stat-box-label">Corrected Triples</span>
+                      <span className="stat-box-val">
+                        {memoryCorrections.length}
+                      </span>
+                      <span className="stat-box-sub">
+                        Active embeddings in ChromaDB
+                      </span>
+                    </div>
+
+                    <div className="stat-box">
+                      <span className="stat-box-label">Consensus Engine</span>
+                      <span className="stat-box-val" style={{ color: "#10b981" }}>
+                        Live Active
+                      </span>
+                      <span className="stat-box-sub">
+                        Injected automatically into prompts
+                      </span>
+                    </div>
+
+                    <div className="stat-box">
+                      <span className="stat-box-label">Session Lifecycle</span>
+                      <span className="stat-box-val" style={{ fontSize: "16px" }}>
+                        Session-Scoped
+                      </span>
+                      <span className="stat-box-sub">
+                        Pruned when cleared to save storage
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="cyber-card">
+                    <span className="card-title">
+                      <Clock size={16} color="#a855f7" />
+                      Learned Mistake-to-Consensus Mappings ({memoryCorrections.length})
+                    </span>
+
+                    {memoryCorrections.length === 0 ? (
+                      <div
+                        style={{
+                          textAlign: "center",
+                          color: "#64748b",
+                          padding: 24,
+                        }}
+                      >
+                        No divergences recorded in this session yet. When a sub-agent makes a
+                        mistake, the Host Orchestrator maps the wrong proposal against the verified
+                        consensus truth in ChromaDB so other agents never repeat it.
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        {memoryCorrections.map((item, idx) => (
+                          <div key={idx} className="stat-box">
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span style={{ fontWeight: 700, color: "#fff" }}>
+                                Query: "{item.query}"
+                              </span>
+                              <span className="q4-kv-badge" style={{ color: "#c084fc", borderColor: "#8b5cf6" }}>
+                                Agent: {item.agent_name || "Worker Node"}
+                              </span>
+                            </div>
+                            <div style={{ color: "#f43f5e", fontSize: "12.5px", marginTop: 6 }}>
+                              <strong>Identified Mistake to Avoid:</strong> {item.wrong_thing || item.wrong_answer}
+                            </div>
+                            <div style={{ color: "#10b981", fontSize: "12.5px", marginTop: 4 }}>
+                              <strong>Verified Consensus Truth:</strong> {item.right_thing || item.correct_answer}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: API Documentation */}
+              {hostTab === "docs" && (
+                <div className="view-container">
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <FileText size={22} color="#a855f7" />
+                        OpenAI-Compatible API Documentation
+                      </h1>
+                      <p className="view-subtitle">
+                        Consume the KIRO-Connect MoA inference swarm using any
+                        standard OpenAI SDK or HTTP client.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Access Parameters Card */}
+                  <div className="cyber-card highlight">
+                    <div className="grid-3">
+                      <div>
+                        <span className="stat-box-label">Base URL</span>
+                        <div
+                          style={{
+                            fontFamily: "monospace",
+                            fontWeight: 700,
+                            marginTop: 4,
+                            color: "#c084fc",
+                          }}
+                        >
+                          {primaryEndpoint}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="stat-box-label">Swarm API Key</span>
+                        <div
+                          style={{
+                            fontFamily: "monospace",
+                            fontWeight: 700,
+                            marginTop: 4,
+                            color: "#fff",
+                          }}
+                        >
+                          {swarmStatus?.host_api_key || "kc-swarm-..."}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="stat-box-label">Model Identifier</span>
+                        <div
+                          style={{
+                            fontFamily: "monospace",
+                            fontWeight: 700,
+                            marginTop: 4,
+                            color: "#06b6d4",
+                          }}
+                        >
+                          kiro-connect-moa
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Language Selector & Code Snippet */}
+                  <div className="cyber-card">
+                    <div className="card-header">
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          className={`cyber-btn ${
+                            docActiveLang === "python"
+                              ? "cyber-btn-primary"
+                              : "cyber-btn-secondary"
+                          }`}
+                          style={{ padding: "6px 14px", fontSize: "12px" }}
+                          onClick={() => setDocActiveLang("python")}
+                        >
+                          Python (OpenAI SDK)
+                        </button>
+                        <button
+                          className={`cyber-btn ${
+                            docActiveLang === "curl"
+                              ? "cyber-btn-primary"
+                              : "cyber-btn-secondary"
+                          }`}
+                          style={{ padding: "6px 14px", fontSize: "12px" }}
+                          onClick={() => setDocActiveLang("curl")}
+                        >
+                          cURL / Bash
+                        </button>
+                        <button
+                          className={`cyber-btn ${
+                            docActiveLang === "ts"
+                              ? "cyber-btn-primary"
+                              : "cyber-btn-secondary"
+                          }`}
+                          style={{ padding: "6px 14px", fontSize: "12px" }}
+                          onClick={() => setDocActiveLang("ts")}
+                        >
+                          TypeScript / Node.js
+                        </button>
+                      </div>
+
+                      <button
+                        className="code-copy-btn"
+                        onClick={() => {
+                          let textToCopy = "";
+                          if (docActiveLang === "python") {
+                            textToCopy = `from openai import OpenAI\n\nclient = OpenAI(\n    base_url="${primaryEndpoint}",\n    api_key="${swarmStatus?.host_api_key || "YOUR_KEY"}"\n)\n\nresponse = client.chat.completions.create(\n    model="kiro-connect-moa",\n    messages=[\n        {"role": "user", "content": "How does local Mixture-of-Agents consensus prevent hallucinations?"}\n    ]\n)\nprint(response.choices[0].message.content)\n# Non-breaking swarm metadata\nprint("Consensus Confidence:", getattr(response, "kiro_confidence", 1.0))`;
+                          } else if (docActiveLang === "curl") {
+                            textToCopy = `curl -X POST ${primaryEndpoint}/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${swarmStatus?.host_api_key || "YOUR_KEY"}" \\\n  -d '{\n    "model": "kiro-connect-moa",\n    "messages": [{"role": "user", "content": "Explain local MoA swarms."}],\n    "temperature": 0.7\n  }'`;
+                          } else {
+                            textToCopy = `import OpenAI from "openai";\n\nconst openai = new OpenAI({\n  baseURL: "${primaryEndpoint}",\n  apiKey: "${swarmStatus?.host_api_key || "YOUR_KEY"}",\n});\n\nconst res = await openai.chat.completions.create({\n  model: "kiro-connect-moa",\n  messages: [{ role: "user", content: "Explain local MoA swarms." }],\n});\nconsole.log(res.choices[0].message.content);`;
+                          }
+                          copyToClipboard(textToCopy, "Code snippet");
+                        }}
+                      >
+                        <Copy size={12} />
+                        Copy Code
+                      </button>
+                    </div>
+
+                    <div className="code-snippet-box">
+                      {docActiveLang === "python" && (
+                        <pre>
+                          {`from openai import OpenAI
 
 client = OpenAI(
-    base_url="${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}",
+    base_url="${primaryEndpoint}",
     api_key="${swarmStatus?.host_api_key || "YOUR_KEY"}"
 )
 
 response = client.chat.completions.create(
     model="kiro-connect-moa",
-    messages=[{"role": "user", "content": "Explain peer-to-peer MoA swarms."}]
+    messages=[
+        {"role": "system", "content": "You are a decentralized LAN MoA inference swarm."},
+        {"role": "user", "content": "How does local Mixture-of-Agents consensus prevent hallucinations?"}
+    ],
+    temperature=0.7,
+    max_tokens=512
 )
-print(response.choices[0].message.content)`}
-                      </pre>
-                    </div>
 
-                    <div>
-                      <div className="input-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                        <span style={{ fontWeight: 600 }}>cURL (Terminal CLI)</span>
-                        <span
-                          className="copy-pill"
-                          onClick={() => {
-                            const code = `curl -X POST "${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}/chat/completions" \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${swarmStatus?.host_api_key || "YOUR_KEY"}" \\\n  -d '{\n    "model": "kiro-connect-moa",\n    "messages": [{"role": "user", "content": "Hello Swarm"}]\n  }'`;
-                            copyTextToClipboard(code, "cURL snippet copied!");
-                          }}
-                        >
-                          Copy cURL
-                        </span>
-                      </div>
-                      <pre
-                        className="input-field-mono"
-                        style={{
-                          background: "var(--bg-input)",
-                          padding: "12px",
-                          borderRadius: "8px",
-                          fontSize: "11px",
-                          color: "var(--accent-emerald)",
-                          lineHeight: "1.5",
-                          whiteSpace: "pre-wrap",
-                          overflowX: "auto",
-                          margin: 0
-                        }}
-                      >
-{`curl -X POST "${swarmStatus?.gateway_endpoint || "http://127.0.0.1:8000/v1"}/chat/completions" \\
+# Output final synthesized consensus response
+print(response.choices[0].message.content)
+
+# Swarm-specific metadata (non-breaking standard schema fields)
+print("Consensus Confidence:", getattr(response, "kiro_confidence", 1.0))
+print("Contributing Nodes:", getattr(response, "contributing_nodes", []))`}
+                        </pre>
+                      )}
+
+                      {docActiveLang === "curl" && (
+                        <pre>
+                          {`curl -X POST ${primaryEndpoint}/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${swarmStatus?.host_api_key || "YOUR_KEY"}" \\
   -d '{
     "model": "kiro-connect-moa",
-    "messages": [{"role": "user", "content": "Hello Swarm"}]
+    "messages": [
+      {"role": "user", "content": "Explain how decentralized MoA inference works."}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 512,
+    "stream": false
   }'`}
-                      </pre>
+                        </pre>
+                      )}
+
+                      {docActiveLang === "ts" && (
+                        <pre>
+                          {`import OpenAI from "openai";
+
+const openai = new OpenAI({
+  baseURL: "${primaryEndpoint}",
+  apiKey: "${swarmStatus?.host_api_key || "YOUR_KEY"}",
+});
+
+async function main() {
+  const completion = await openai.chat.completions.create({
+    model: "kiro-connect-moa",
+    messages: [{ role: "user", content: "Explain how decentralized MoA inference works." }],
+  });
+
+  console.log(completion.choices[0].message.content);
+}
+
+main();`}
+                        </pre>
+                      )}
                     </div>
                   </div>
-                </div>
 
-                {/* Quick Fleet Snapshot */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <div className="panel-title">Swarm Node Topology</div>
-                    <button className="btn-action btn-ghost" onClick={() => setActiveTab("nodes")}>
-                      View Detailed Fleet →
-                    </button>
-                  </div>
-                  {nodes.length === 0 ? (
-                    <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-dim)" }}>
-                      No nodes currently active. Start the host model or pair workers on the network.
-                    </div>
-                  ) : (
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "12px" }}>
-                      {nodes.map((node) => (
-                        <div key={node.id} style={{ background: "var(--bg-input)", border: "1px solid var(--border-subtle)", borderRadius: "8px", padding: "12px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                            <strong>{node.name}</strong>
-                            <span className={`pill pill-${node.status}`}>{node.status.toUpperCase()}</span>
-                          </div>
-                          <div style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>{node.model}</div>
-                          <div style={{ fontSize: "11px", color: "var(--accent-purple-light)", marginTop: "6px" }}>
-                            {node.tokens_per_sec ? `${node.tokens_per_sec} tok/s` : "Idle"} • {node.last_latency_ms ? `${node.last_latency_ms} ms` : "—"}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+                  {/* Interactive Query Tester */}
+                  <div className="cyber-card">
+                    <span className="card-title">
+                      <Code2 size={16} color="#06b6d4" />
+                      Live Swarm Test Console
+                    </span>
 
-            {/* TAB: MOA SWARM PLAYGROUND */}
-            {activeTab === "playground" && (
-              <div>
-                <div className="panel" style={{ marginBottom: "20px" }}>
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">Interactive MoA Swarm Playground</div>
-                      <div className="panel-subtitle">
-                        Test decentralized Mixture-of-Agents consensus inference with real-time confidence & node alignment
-                      </div>
-                    </div>
-                    <span className="panel-tag">Live Swarm Execution</span>
-                  </div>
-
-                  <div className="chat-container">
-                    <div className="chat-input-box">
-                      <label className="input-label" style={{ marginBottom: "6px" }}>
-                        Prompt / Query to Swarm
+                    <div className="input-group">
+                      <label className="input-label">
+                        <span>Prompt to Test Consensus</span>
                       </label>
                       <textarea
-                        className="chat-textarea"
-                        placeholder="Enter your prompt here... (e.g. Compare Rust and C++ for high-performance network services)"
-                        value={playgroundPrompt}
-                        onChange={(e) => setPlaygroundPrompt(e.target.value)}
-                        disabled={isPlaygroundRunning}
+                        rows={3}
+                        className="cyber-input"
+                        value={docPrompt}
+                        onChange={(e) => setDocPrompt(e.target.value)}
                       />
-
-                      <div className="grid-cards-2" style={{ marginTop: "12px", gap: "14px" }}>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <div className="input-label">
-                            <span>Temperature</span>
-                            <span style={{ color: "var(--accent-purple-light)", fontWeight: "bold" }}>
-                              {playgroundTemperature.toFixed(2)}
-                            </span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="1.5"
-                            step="0.05"
-                            style={{ width: "100%", accentColor: "var(--accent-purple)" }}
-                            value={playgroundTemperature}
-                            onChange={(e) => setPlaygroundTemperature(parseFloat(e.target.value))}
-                            disabled={isPlaygroundRunning}
-                          />
-                        </div>
-
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <div className="input-label">
-                            <span>Max Tokens</span>
-                            <span style={{ color: "var(--accent-purple-light)", fontWeight: "bold" }}>
-                              {playgroundMaxTokens}
-                            </span>
-                          </div>
-                          <input
-                            type="range"
-                            min="128"
-                            max="2048"
-                            step="128"
-                            style={{ width: "100%", accentColor: "var(--accent-purple)" }}
-                            value={playgroundMaxTokens}
-                            onChange={(e) => setPlaygroundMaxTokens(parseInt(e.target.value, 10))}
-                            disabled={isPlaygroundRunning}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="chat-action-bar">
-                        <div style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>
-                          {nodes.length > 0 ? (
-                            <span>Targeting {nodes.length} active node{nodes.length > 1 ? "s" : ""} on LAN</span>
-                          ) : (
-                            <span style={{ color: "var(--accent-rose)" }}>Warning: No swarm nodes active. Launch host engine or pair workers.</span>
-                          )}
-                        </div>
-                        <button
-                          className="btn-action btn-purple"
-                          disabled={isPlaygroundRunning || !playgroundPrompt.trim() || nodes.length === 0}
-                          onClick={handleRunPlayground}
-                        >
-                          {isPlaygroundRunning ? "Synthesizing Consensus..." : "⚡ Run Swarm Inference"}
-                        </button>
-                      </div>
                     </div>
 
-                    {/* Result Output Card */}
-                    {playgroundResult && (
-                      <div className="chat-response-card" style={{ marginTop: "10px" }}>
-                        <div className="chat-meta-bar">
-                          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                            <span
-                              className="pill"
-                              style={{
-                                background: playgroundResult.confidence >= 0.75 ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
-                                color: playgroundResult.confidence >= 0.75 ? "var(--accent-emerald)" : "var(--accent-amber)",
-                                border: `1px solid ${playgroundResult.confidence >= 0.75 ? "rgba(16, 185, 129, 0.3)" : "rgba(245, 158, 11, 0.3)"}`
-                              }}
-                            >
-                              ★ {(playgroundResult.confidence * 100).toFixed(0)}% Consensus Alignment
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        className="cyber-btn cyber-btn-primary"
+                        onClick={handleExecuteDocQuery}
+                        disabled={isDocQueryRunning}
+                      >
+                        <Sparkles size={14} />
+                        <span>
+                          {isDocQueryRunning
+                            ? "Swarm Inferencing..."
+                            : "Execute Swarm Query"}
+                        </span>
+                      </button>
+                    </div>
+
+                    {docResponse && (
+                      <div
+                        style={{
+                          background: "#08080d",
+                          padding: 16,
+                          borderRadius: 8,
+                          border: "1px solid #1e1e2f",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 12,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                          }}
+                        >
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <CheckCircle2 size={16} color="#10b981" />
+                            <span style={{ fontWeight: 700, color: "#fff" }}>
+                              Consensus Confidence:{" "}
+                              {Math.round(
+                                (docResponse.kiro_confidence || 1.0) * 100
+                              )}
+                              %
                             </span>
-                            {playgroundResult.memoryApplied && (
-                              <span className="q4-kv-badge" style={{ fontSize: "10.5px" }}>
-                                🧠 Shared Memory Applied
-                              </span>
-                            )}
-                            {playgroundResult.latencyMs && (
-                              <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                                ⏱️ {playgroundResult.latencyMs} ms
-                              </span>
-                            )}
-                            {playgroundResult.usage && (
-                              <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                                📊 {playgroundResult.usage.completion_tokens} tokens
-                              </span>
-                            )}
                           </div>
-                          <span
-                            className="copy-pill"
-                            onClick={() => copyTextToClipboard(playgroundResult.text, "Synthesized response copied!")}
-                          >
-                            📋 Copy Response
+                          <span style={{ fontSize: "11px", color: "#64748b" }}>
+                            Roundtrip: {docResponse.client_latency_ms} ms
                           </span>
                         </div>
 
-                        <div className="chat-bubble-text">
-                          {playgroundResult.text}
-                        </div>
-
-                        {/* Contributing & Divergent Nodes */}
-                        <div style={{ marginTop: "14px", paddingTop: "10px", borderTop: "1px solid rgba(255, 255, 255, 0.05)", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>Participating Nodes:</span>
-                          {playgroundResult.nodesParticipated.length > 0 ? (
-                            playgroundResult.nodesParticipated.map((n, i) => (
-                              <span key={i} className="pill pill-idle" style={{ fontSize: "10.5px" }}>
-                                ✓ {n}
-                              </span>
-                            ))
-                          ) : (
-                            <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>Swarm default</span>
-                          )}
-
-                          {playgroundResult.divergentNodes && playgroundResult.divergentNodes.length > 0 && (
-                            <div style={{ width: "100%", marginTop: "6px" }}>
-                              <span style={{ fontSize: "11px", color: "var(--accent-rose)", fontWeight: "bold" }}>
-                                ⚠️ Filtered Divergent Proposals ({playgroundResult.divergentNodes.length}):
-                              </span>
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
-                                {playgroundResult.divergentNodes.map((d: any, idx: number) => (
-                                  <span key={idx} className="pill pill-flagged" style={{ fontSize: "10px" }}>
-                                    {d.node_name || "Unknown node"} (score: {typeof d.divergence_score === "number" ? d.divergence_score.toFixed(2) : "divergent"})
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB: MODELS & CUSTOM FOLDER SCANNER */}
-            {activeTab === "models" && (
-              <div>
-                {/* Custom Folder Scanner Panel */}
-                <div className="panel" style={{ marginBottom: "20px" }}>
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">Custom Folder Model Scanner</div>
-                      <div className="panel-subtitle">
-                        Point to any directory on your computer or external drive containing GGUF model files
-                      </div>
-                    </div>
-                    <span className="panel-tag">Custom Path Support</span>
-                  </div>
-
-                  <form onSubmit={handleScanCustomFolder} style={{ display: "flex", gap: "10px", marginBottom: "14px" }}>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="e.g. D:\models or C:\Users\rajaa\Downloads or /path/to/models"
-                      value={customFolderPath}
-                      onChange={(e) => setCustomFolderPath(e.target.value)}
-                    />
-                    <button
-                      type="submit"
-                      disabled={isScanningFolder || !customFolderPath.trim()}
-                      className="btn-action btn-purple"
-                      style={{ flexShrink: 0 }}
-                    >
-                      {isScanningFolder ? "Scanning..." : "Scan Folder"}
-                    </button>
-                  </form>
-
-                  {/* Discovered Models List */}
-                  <div className="input-label">Available GGUF Models ({localModels.length} discovered)</div>
-                  {localModels.length === 0 ? (
-                    <div style={{ padding: "16px", background: "var(--bg-input)", borderRadius: "8px", color: "var(--text-dim)", textAlign: "center" }}>
-                      No GGUF models discovered yet. Enter a custom folder path above or place models in <code>~/models</code>.
-                    </div>
-                  ) : (
-                    <div className="model-list-grid">
-                      {localModels.map((m, idx) => (
                         <div
-                          key={idx}
-                          className={`model-card-item ${selectedModelPath === m.path ? "selected" : ""}`}
-                          onClick={() => setSelectedModelPath(m.path)}
+                          style={{
+                            color: "#e2e8f0",
+                            lineHeight: 1.6,
+                            whiteSpace: "pre-wrap",
+                          }}
                         >
-                          <div>
-                            <div className="model-card-name">{m.name}</div>
-                            <div className="model-card-meta">
-                              <span>Size: {m.size_gb} GB</span>
-                              <span>Folder: {m.parent_folder}</span>
-                            </div>
-                          </div>
-                          <button
-                            className="btn-action btn-ghost"
-                            style={{ padding: "4px 8px", fontSize: "11px" }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedModelPath(m.path);
-                            }}
-                          >
-                            {selectedModelPath === m.path ? "Selected ✓" : "Select"}
-                          </button>
+                          {docResponse.choices[0]?.message?.content}
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
 
-                {/* Engine Runtime Settings */}
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">Host llama.cpp Process Configuration</div>
-                      <div className="panel-subtitle">
-                        Fixed Q4 KV cache quantization flags translated directly into <code>llama-server.exe</code>
+                        {docResponse.contributing_nodes && (
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "11px", color: "#64748b" }}>
+                              Participating Nodes:
+                            </span>
+                            {docResponse.contributing_nodes.map(
+                              (name: string, i: number) => (
+                                <span key={i} className="q4-kv-badge">
+                                  {name}
+                                </span>
+                              )
+                            )}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                    <span className="q4-kv-badge">Q4 KV Cache (-ctk q4_0 -ctv q4_0)</span>
-                  </div>
-
-                  <div className="grid-cards-2">
-                    <div className="input-group">
-                      <div className="input-label">Active GGUF Model Path</div>
-                      <input
-                        type="text"
-                        className="input-field input-field-mono"
-                        placeholder="Path to model file"
-                        value={selectedModelPath}
-                        onChange={(e) => setSelectedModelPath(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <div className="input-label">
-                        <span>Context Window (--ctx-size)</span>
-                        <span style={{ color: "var(--accent-purple-light)", fontWeight: "bold" }}>{contextSize} tokens</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="2048"
-                        max="16384"
-                        step="1024"
-                        style={{ width: "100%", accentColor: "var(--accent-purple)" }}
-                        value={contextSize}
-                        onChange={(e) => setContextSize(Number(e.target.value))}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "12px", borderTop: "1px solid var(--border-subtle)", paddingTop: "14px" }}>
-                    <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
-                      {hostLlamaStatus?.running ? (
-                        <span style={{ color: "var(--accent-emerald)" }}>
-                          Engine running on port {hostLlamaStatus.port} (PID {hostLlamaStatus.pid})
-                        </span>
-                      ) : (
-                        <span>Ready to launch local engine process</span>
-                      )}
-                    </div>
-
-                    {hostLlamaStatus?.running ? (
-                      <button className="btn-action btn-danger" onClick={stopHostLlama}>
-                        Stop Host Engine
-                      </button>
-                    ) : (
-                      <button
-                        className="btn-action btn-purple"
-                        disabled={isLlamaStarting || !selectedModelPath}
-                        onClick={startHostLlama}
-                      >
-                        {isLlamaStarting ? "Starting llama-server..." : "Launch Host Engine"}
-                      </button>
                     )}
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* TAB: SWARM FLEET & BENCHMARK */}
-            {activeTab === "nodes" && (
-              <div>
-                <div className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <div className="panel-title">Connected Swarm Fleet ({nodes.length})</div>
-                      <div className="panel-subtitle">
-                        Mixture-of-Agents node pool with real-time throughput & integrity checking
-                      </div>
+              )}
+            </>
+          ) : (
+            /* WORKER MODE VIEW */
+            <div className="view-container">
+              {/* TAB: Node Telemetry */}
+              {workerTab === "telemetry" && (
+                <>
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Activity size={22} color="#06b6d4" />
+                        Worker Sub-Agent Telemetry
+                      </h1>
+                      <p className="view-subtitle">
+                        Local sub-agent node running a lightweight model to serve
+                        the Host Orchestrator.
+                      </p>
                     </div>
+                  </div>
+
+                  <div className="grid-3">
+                    <div className="stat-box">
+                      <span className="stat-box-label">Connection State</span>
+                      <span
+                        className="stat-box-val"
+                        style={{
+                          color: workerStatus?.is_paired ? "#10b981" : "#f43f5e",
+                        }}
+                      >
+                        {workerStatus?.is_paired ? "Paired" : "Unpaired"}
+                      </span>
+                      <span className="stat-box-sub">
+                        Host: {workerStatus?.host_name || "None"}
+                      </span>
+                    </div>
+
+                    <div className="stat-box">
+                      <span className="stat-box-label">Local Compute Port</span>
+                      <span className="stat-box-val">
+                        {workerStatus?.port || 8082}
+                      </span>
+                      <span className="stat-box-sub">
+                        LAN Accessible (0.0.0.0)
+                      </span>
+                    </div>
+
+                    <div className="stat-box">
+                      <span className="stat-box-label">Tokens Generated</span>
+                      <span className="stat-box-val">
+                        {workerStatus?.tokens_generated || 0}
+                      </span>
+                      <span className="stat-box-sub">Contributed compute</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* TAB: Compute Engine */}
+              {workerTab === "compute" && (
+                <>
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Cpu size={22} color="#06b6d4" />
+                        Worker Compute Engine
+                      </h1>
+                      <p className="view-subtitle">
+                        Select and launch a lightweight GGUF model for this
+                        worker sub-agent.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="cyber-card">
+                    <span className="card-title">
+                      <Cpu size={16} color="#06b6d4" />
+                      Select Local Worker Model
+                    </span>
+
+                    <div className="input-group">
+                      <label className="input-label">
+                        <span>Discovered GGUF Models</span>
+                      </label>
+                      <select
+                        className="cyber-select"
+                        value={workerModelPath}
+                        onChange={(e) => setWorkerModelPath(e.target.value)}
+                      >
+                        {localModels.length === 0 ? (
+                          <option value="">No models found</option>
+                        ) : (
+                          localModels.map((m) => (
+                            <option key={m.path} value={m.path}>
+                              {m.name} ({m.size_gb} GB)
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button
+                        className="cyber-btn cyber-btn-cyan"
+                        onClick={handleStartWorkerEngine}
+                        disabled={isWorkerStarting || !workerModelPath}
+                      >
+                        <Play size={14} />
+                        <span>
+                          {isWorkerStarting ? "Starting..." : "Start Worker Engine"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* TAB: Pairing & Discovery */}
+              {workerTab === "security" && (
+                <>
+                  <div className="view-header">
+                    <div className="view-title-group">
+                      <h1 className="view-title">
+                        <Radio size={22} color="#06b6d4" />
+                        Network Discovery & Pairing
+                      </h1>
+                      <p className="view-subtitle">
+                        Discover Swarm Hosts on the LAN via mDNS or connect
+                        manually using the 6-digit session PIN.
+                      </p>
+                    </div>
+
                     <button
-                      className="btn-action btn-ghost"
-                      disabled={isBenchmarking || nodes.length === 0}
-                      onClick={handleRunBenchmark}
+                      className="cyber-btn cyber-btn-secondary"
+                      onClick={scanWorkerHosts}
+                      disabled={isScanningHosts}
                     >
-                      {isBenchmarking ? "Benchmarking Swarm..." : "Run Fleet Benchmark"}
+                      <RefreshCw size={14} />
+                      <span>{isScanningHosts ? "Scanning..." : "Scan LAN"}</span>
                     </button>
                   </div>
 
-                  {nodes.length === 0 ? (
-                    <div style={{ textAlign: "center", padding: "30px 0", color: "var(--text-dim)" }}>
-                      No nodes registered. Launch the host model or pair worker laptops to view live fleet metrics.
-                    </div>
-                  ) : (
-                    <table className="swarm-table">
-                      <thead>
-                        <tr>
-                          <th>Node Name</th>
-                          <th>Model Loaded</th>
-                          <th>Hardware</th>
-                          <th>Status</th>
-                          <th>Throughput</th>
-                          <th>Latency</th>
-                          <th>Divergence Checks</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {nodes.map((node) => (
-                          <tr key={node.id}>
-                            <td>
-                              <strong>{node.name}</strong>
-                              {node.is_host_local && (
-                                <span style={{ marginLeft: "6px", color: "var(--accent-purple-light)", fontSize: "11px" }}>
-                                  (Host)
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ color: "var(--text-muted)" }}>{node.model}</td>
-                            <td>{node.hardware}</td>
-                            <td>
-                              <span className={`pill pill-${node.status}`}>{node.status.toUpperCase()}</span>
-                            </td>
-                            <td>
-                              {node.tokens_per_sec ? (
-                                <strong style={{ color: "var(--accent-emerald)" }}>{node.tokens_per_sec} tok/s</strong>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                            <td>{node.last_latency_ms ? `${node.last_latency_ms} ms` : "—"}</td>
-                            <td>
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                {node.divergence_count > 0 ? (
-                                  <span style={{ color: "var(--accent-amber)", fontWeight: "bold" }}>
-                                    {node.divergence_count} / 3 flags
-                                  </span>
-                                ) : (
-                                  <span style={{ color: "var(--accent-emerald)" }}>Aligned</span>
-                                )}
-                                {node.status === "flagged" && (
-                                  <button
-                                    className="btn-action btn-ghost"
-                                    style={{ padding: "2px 6px", fontSize: "10px", color: "var(--accent-emerald)" }}
-                                    onClick={() => handleResetNodeFlag(node.id)}
-                                    title="Clear flags and restore node to active inference pool"
-                                  >
-                                    Unflag ↺
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
+                  {/* Discovered Hosts */}
+                  <div className="cyber-card highlight">
+                    <span className="card-title">
+                      <Wifi size={16} color="#06b6d4" />
+                      Discovered Swarm Hosts on LAN ({discoveredHosts.length})
+                    </span>
 
-                  {/* Benchmark Output */}
-                  {benchmarkResults.length > 0 && (
-                    <div style={{ marginTop: "18px", padding: "14px", background: "var(--bg-input)", borderRadius: "8px" }}>
-                      <div style={{ fontWeight: "700", marginBottom: "8px", color: "var(--accent-purple-light)" }}>
-                        Fleet Benchmark Results
+                    {discoveredHosts.length === 0 ? (
+                      <div
+                        style={{
+                          textAlign: "center",
+                          color: "#64748b",
+                          padding: 16,
+                        }}
+                      >
+                        No mDNS broadcast detected yet. Make sure the Host is
+                        running on the same LAN, or enter the Host IP below.
                       </div>
-                      <div className="grid-cards-4">
-                        {benchmarkResults.map((b, i) => (
-                          <div key={i} className="stat-widget">
-                            <div className="stat-widget-label">{b.node_name}</div>
-                            <div className="stat-widget-val" style={{ fontSize: "18px" }}>{b.tokens_per_sec} tok/s</div>
-                            <div className="stat-widget-sub">{b.latency_ms} ms latency</div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        {discoveredHosts.map((h, i) => (
+                          <div
+                            key={i}
+                            className="stat-box"
+                            style={{
+                              flex: 1,
+                              minWidth: 220,
+                              borderColor: "rgba(6, 182, 212, 0.4)",
+                            }}
+                          >
+                            <span className="stat-box-label">{h.display_name || h.name || "Swarm Host"}</span>
+                            <span
+                              style={{
+                                fontFamily: "monospace",
+                                color: "#fff",
+                                fontWeight: 700,
+                                fontSize: "12px",
+                              }}
+                            >
+                              {h.endpoint || `http://${h.ip}:${h.port}`}
+                            </span>
+                            <button
+                              className="cyber-btn cyber-btn-cyan"
+                              style={{
+                                marginTop: 8,
+                                padding: "4px 10px",
+                                fontSize: "11px",
+                              }}
+                              onClick={() => {
+                                const ep = h.endpoint || `http://${h.ip}:${h.port}`;
+                                setWorkerHostIp(ep);
+                                showToast(`Selected host: ${h.display_name || h.name || "Swarm Host"}`);
+                              }}
+                            >
+                              Select Host
+                            </button>
                           </div>
                         ))}
                       </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          /* WORKER MODE */
-          <div style={{ maxWidth: "800px", margin: "0 auto" }}>
-            {/* Worker Engine Panel */}
-            <div className="panel" style={{ marginBottom: "20px" }}>
-              <div className="panel-header">
-                <div>
-                  <div className="panel-title">Worker Compute Node Engine</div>
-                  <div className="panel-subtitle">Donate your laptop's local LLM compute to a LAN Swarm Host</div>
-                </div>
-                <span className={`pill ${workerEngineRunning ? "pill-busy" : "pill-idle"}`}>
-                  {workerEngineRunning ? "ENGINE RUNNING" : "ENGINE STOPPED"}
-                </span>
-              </div>
-
-              <div className="input-group">
-                <label className="input-label">Select Worker GGUF Model</label>
-                {localModels.length > 0 ? (
-                  <select
-                    className="input-field"
-                    value={selectedModelPath}
-                    onChange={(e) => setSelectedModelPath(e.target.value)}
-                  >
-                    {localModels.map((m, idx) => (
-                      <option key={idx} value={m.path}>
-                        {m.name} ({m.size_gb} GB)
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    className="input-field"
-                    placeholder="Path to worker model"
-                    value={selectedModelPath}
-                    onChange={(e) => setSelectedModelPath(e.target.value)}
-                  />
-                )}
-              </div>
-
-              <div className="grid-cards-2">
-                <div className="input-group">
-                  <label className="input-label">Worker llama.cpp Port (LAN Bound: 0.0.0.0)</label>
-                  <input
-                    type="number"
-                    className="input-field"
-                    value={workerPort}
-                    onChange={(e) => setWorkerPort(Number(e.target.value))}
-                  />
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label">KV Cache Quantization</label>
-                  <div className="q4-kv-badge" style={{ marginTop: "4px" }}>
-                    Q4 Fixed (-ctk q4_0 -ctv q4_0)
+                    )}
                   </div>
-                </div>
-              </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "14px", borderTop: "1px solid var(--border-subtle)", paddingTop: "14px" }}>
-                <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
-                  {workerEngineRunning ? (
-                    <span style={{ color: "var(--accent-emerald)" }}>
-                      Engine active on port {workerPort} (LAN IP: {workerStatus.local_ip || "detecting..."})
+                  {/* Manual Pairing Form */}
+                  <div className="cyber-card">
+                    <span className="card-title">
+                      <Key size={16} color="#a855f7" />
+                      Authenticate with Host 6-Digit PIN
                     </span>
-                  ) : (
-                    <span>Launch engine before pairing with Swarm Host</span>
-                  )}
-                </div>
 
-                {workerEngineRunning ? (
-                  <button className="btn-action btn-danger" onClick={stopWorkerEngine}>
-                    Stop Worker Engine
-                  </button>
-                ) : (
-                  <button
-                    className="btn-action btn-purple"
-                    disabled={isWorkerEngineStarting || !selectedModelPath}
-                    onClick={startWorkerEngine}
-                  >
-                    {isWorkerEngineStarting ? "Starting Engine..." : "Launch Worker Engine"}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Join Swarm Card */}
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <div className="panel-title">Authenticate & Join Host Swarm</div>
-                  <div className="panel-subtitle">Connect to Host via mDNS auto-discovery or enter Host URL</div>
-                </div>
-                {workerStatus.connected ? (
-                  <span className="pill pill-idle">CONNECTED TO SWARM</span>
-                ) : (
-                  <span className="pill pill-flagged">DISCONNECTED</span>
-                )}
-              </div>
-
-              {/* Local Adapter Information & Refresh Bar */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", padding: "10px 14px", background: "var(--bg-input)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>
-                  Your LAN IP(s): <strong style={{ color: "var(--accent-purple-light)" }}>{workerStatus.all_local_ips?.join(", ") || workerStatus.local_ip || "Detecting..."}</strong>
-                </div>
-                <button
-                  type="button"
-                  className="btn-action btn-ghost"
-                  style={{ fontSize: "11px", padding: "4px 8px" }}
-                  disabled={isScanningHosts}
-                  onClick={() => fetchWorkerInfo(true)}
-                >
-                  {isScanningHosts ? "Scanning LAN (mDNS)..." : "🔄 Refresh LAN Discovery"}
-                </button>
-              </div>
-
-              {/* Discovered Hosts on LAN */}
-              <div style={{ marginBottom: "14px", padding: "12px", background: "var(--bg-input)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "11.5px", fontWeight: "700", color: "var(--accent-purple-light)", marginBottom: "8px" }}>
-                  Discovered Swarm Hosts on LAN (mDNS):
-                </div>
-                {discoveredHosts.length > 0 ? (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                    {discoveredHosts.map((h, i) => (
-                      <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                        {(h.endpoints && h.endpoints.length > 0 ? h.endpoints : [h.endpoint]).map((ep: string, epIdx: number) => (
-                          <button
-                            key={epIdx}
-                            type="button"
-                            className="btn-action btn-ghost"
-                            style={{
-                              fontSize: "11px",
-                              borderColor: workerHostEndpoint === ep ? "var(--accent-purple)" : undefined,
-                              background: workerHostEndpoint === ep ? "rgba(168, 85, 247, 0.15)" : undefined
-                            }}
-                            onClick={() => setWorkerHostEndpoint(ep)}
-                          >
-                            ✓ {h.display_name} ({ep})
-                          </button>
-                        ))}
+                    <div className="grid-2">
+                      <div className="input-group">
+                        <label className="input-label">
+                          <span>Host Gateway Endpoint</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. http://192.168.1.50:8000"
+                          className="cyber-input"
+                          value={workerHostIp}
+                          onChange={(e) => setWorkerHostIp(e.target.value)}
+                        />
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: "11.5px", color: "var(--text-dim)", lineHeight: "1.5" }}>
-                    No hosts auto-discovered via mDNS yet. Ensure the Host has started KIRO-Connect on the same LAN / Wi-Fi network, or type the Host's IP address directly below.
-                  </div>
-                )}
-              </div>
 
-              <div className="input-group">
-                <label className="input-label">Host Swarm Endpoint</label>
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder={workerStatus.local_ip ? `e.g. http://${workerStatus.local_ip}:8000` : "e.g. http://<host-ip>:8000"}
-                  value={workerHostEndpoint}
-                  onChange={(e) => setWorkerHostEndpoint(e.target.value)}
-                />
-              </div>
+                      <div className="input-group">
+                        <label className="input-label">
+                          <span>6-Digit Pairing PIN</span>
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          placeholder="e.g. 849201"
+                          className="cyber-input cyber-input-mono"
+                          value={workerPin}
+                          onChange={(e) => setWorkerPin(e.target.value)}
+                        />
+                      </div>
+                    </div>
 
-              <div className="input-group">
-                <label className="input-label">Enter 6-Digit Pairing Code from Host Dashboard</label>
-                <input
-                  type="text"
-                  maxLength={6}
-                  className="input-field input-field-mono"
-                  style={{ letterSpacing: "6px", fontSize: "20px", fontWeight: "bold", textAlign: "center" }}
-                  placeholder="000000"
-                  value={workerPairingCode}
-                  onChange={(e) => setWorkerPairingCode(e.target.value)}
-                />
-              </div>
-
-              {workerStatus.error && (
-                <div style={{ color: "var(--accent-rose)", fontSize: "12px", marginBottom: "12px" }}>
-                  {workerStatus.error}
-                </div>
-              )}
-
-              {workerStatus.connected ? (
-                <div style={{ padding: "14px", background: "rgba(16,185,129,0.1)", borderRadius: "8px", border: "1px solid rgba(16,185,129,0.3)" }}>
-                  <div style={{ color: "var(--accent-emerald)", fontWeight: "bold" }}>
-                    ✓ Authenticated with Swarm Host: {workerStatus.host}
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        className="cyber-btn cyber-btn-primary"
+                        onClick={handleWorkerJoinSwarm}
+                        disabled={isWorkerJoining || !workerHostIp || !workerPin}
+                      >
+                        <ShieldCheck size={14} />
+                        <span>
+                          {isWorkerJoining
+                            ? "Authenticating..."
+                            : "Pair & Join Swarm"}
+                        </span>
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ fontSize: "11.5px", color: "var(--text-dim)", marginTop: "4px" }}>
-                    Heartbeat active. The Host will route MoA subtask prompts to this worker over LAN.
-                  </div>
-                </div>
-              ) : (
-                <button
-                  className="btn-action btn-purple"
-                  style={{ width: "100%", marginTop: "6px" }}
-                  disabled={!workerEngineRunning}
-                  onClick={handleWorkerPair}
-                >
-                  {workerEngineRunning ? "Authenticate & Join Swarm" : "Launch Worker Engine First Above"}
-                </button>
+                </>
               )}
             </div>
-          </div>
-        )}
-      </main>
+          )}
+        </main>
+      </div>
 
-      {/* Global Non-blocking Toast Notification */}
-      {toast && (
-        <div className={`toast-banner toast-${toast.type}`}>
-          <span>{toast.message}</span>
-          <span
-            style={{ cursor: "pointer", marginLeft: "10px", fontWeight: "bold", opacity: 0.8 }}
-            onClick={() => setToast(null)}
-          >
-            ✕
-          </span>
+      {/* Floating Toast Feedback Banner */}
+      {toastMessage && (
+        <div className="toast-banner">
+          <CheckCircle2 size={16} color="#a855f7" />
+          <span>{toastMessage}</span>
         </div>
       )}
     </div>

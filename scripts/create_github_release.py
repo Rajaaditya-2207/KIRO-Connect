@@ -19,6 +19,7 @@ Official Windows release packages for **KIRO-Connect: A Decentralized Peer-to-Pe
 ### 📦 Windows Distribution Assets:
 - **`KIRO-Connect-Setup.msi`** (~72 MB): **Official Windows 64-bit MSI Installer**. Installs KIRO-Connect cleanly to Program Files, provisions Desktop and Start Menu shortcuts, and registers standard Windows Add/Remove Programs support.
 - **`KIRO-Connect.exe`** (~72 MB): **All-in-One Integrated Standalone Portable Executable**. Bundles the FastAPI/Uvicorn backend, ChromaDB vector store, and full Cyberpunk React frontend into a single standalone file. No Python, terminal, or installer required—just double-click and run!
+- **`KIRO-Connect-v0.1.0-Source.zip`** (~1.5 MB): Clean source code archive containing all frontend React components, FastAPI MoA orchestration services, and build scripts.
 
 ### ✨ Highlights:
 - **Decentralized LAN MoA:** Multi-layer Mixture-of-Agents reasoning across local machines.
@@ -111,7 +112,8 @@ def main():
     # 3. Assets we want to keep
     target_assets = {
         "KIRO-Connect-Setup.msi": Path("release/KIRO-Connect-Setup.msi"),
-        "KIRO-Connect.exe": Path("release/KIRO-Connect.exe")
+        "KIRO-Connect.exe": Path("release/KIRO-Connect.exe"),
+        "KIRO-Connect-v0.1.0-Source.zip": Path("release/KIRO-Connect-v0.1.0-Source.zip")
     }
 
     # Delete any unwanted assets that are NOT in target_assets

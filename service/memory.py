@@ -282,6 +282,29 @@ class SwarmSharedMemory:
             logger.error(f"Error fetching corrections from ChromaDB: {e}")
             return []
 
+    def clear_session_memory(self) -> bool:
+        """Clears all session mappings in ChromaDB so storage does not accumulate."""
+        if not self.client:
+            return False
+        with self._lock:
+            try:
+                try:
+                    self.client.delete_collection("kiro_shared_swarm_memory")
+                except Exception:
+                    pass
+                self.collection = self.client.get_or_create_collection(
+                    name="kiro_shared_swarm_memory",
+                    embedding_function=self.embedding_fn,
+                    metadata={"description": "KIRO-Connect Swarm Shared Memory Mappings (Wrong -> Right)"}
+                )
+                self.total_mappings_recorded = 0
+                self.last_update_time = time.time()
+                logger.info("Cleared all shared memory mappings in ChromaDB for current session.")
+                return True
+            except Exception as e:
+                logger.error(f"Error clearing ChromaDB session memory: {e}")
+                return False
+
 
 # Aliases for backward compatibility
 HostSessionMemory = SwarmSharedMemory

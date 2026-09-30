@@ -364,6 +364,19 @@ async def refresh_pairing_code():
     return {"pairing_code": current_pairing_code}
 
 
+@app.post("/api/swarm/rotate-api-key")
+async def rotate_api_key():
+    """Generates and rotates to a fresh secure random Host Swarm API Key."""
+    global HOST_API_KEY
+    HOST_API_KEY = "kc-swarm-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+    logger.info(f"Host Swarm API Key rotated to: {HOST_API_KEY}")
+    return {
+        "success": True,
+        "host_api_key": HOST_API_KEY,
+        "message": "Swarm API Key rotated successfully"
+    }
+
+
 @app.get("/api/swarm/nodes")
 async def list_swarm_nodes():
     """Returns detailed list of all connected nodes with live throughput and health."""
@@ -513,7 +526,7 @@ async def host_llama_status():
 
 @app.get("/api/worker/discovered-hosts")
 async def get_discovered_hosts(refresh: bool = False):
-    """Returns hosts found on LAN via mDNS, with option to force active re-scan."""
+    """Returns hosts found on LAN via mDNS, with normalized formatting and fallback discovery."""
     global worker_browser
     if refresh and worker_browser:
         worker_browser.stop()
@@ -522,7 +535,44 @@ async def get_discovered_hosts(refresh: bool = False):
         worker_browser = SwarmWorkerBrowser()
         worker_browser.start()
         await asyncio.sleep(0.3)
-    return {"hosts": worker_browser.get_hosts()}
+
+    raw_hosts = worker_browser.get_hosts()
+    hosts = []
+    seen = set()
+
+    for h in raw_hosts:
+        display_name = h.get("display_name") or h.get("name") or "Swarm Host"
+        ip = h.get("ip", "127.0.0.1")
+        port = h.get("port", 8000)
+        endpoint = h.get("endpoint") or f"http://{ip}:{port}"
+        key = f"{ip}:{port}"
+        if key not in seen:
+            seen.add(key)
+            hosts.append({
+                "name": display_name,
+                "display_name": display_name,
+                "ip": ip,
+                "port": port,
+                "endpoint": endpoint,
+                "all_ips": h.get("all_ips", [ip])
+            })
+
+    # If broadcaster is running on this machine (or local gateway), ensure it is also discoverable locally
+    if broadcaster and broadcaster.is_broadcasting:
+        local_ip = get_local_ip()
+        key = f"{local_ip}:{gateway_port}"
+        if key not in seen:
+            seen.add(key)
+            hosts.append({
+                "name": host_display_name,
+                "display_name": host_display_name,
+                "ip": local_ip,
+                "port": gateway_port,
+                "endpoint": f"http://{local_ip}:{gateway_port}",
+                "all_ips": get_all_local_ips()
+            })
+
+    return {"hosts": hosts}
 
 
 @app.post("/api/worker/start-engine")
@@ -610,6 +660,13 @@ async def list_corrections():
     """Internal compatibility endpoint for stored correction memories."""
     items = memory.get_all_corrections()
     return {"corrections": items}
+
+
+@app.post("/api/memory/clear")
+async def clear_session_memory():
+    """Clears all shared session memory from ChromaDB so storage does not accumulate."""
+    success = memory.clear_session_memory()
+    return {"success": success, "message": "Session memory cleared from ChromaDB"}
 
 
 # ============================================================================
